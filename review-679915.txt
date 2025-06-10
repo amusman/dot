@@ -1,0 +1,7 @@
++((ULE|UGT) (CMPconst  [0] x)) => ((EQ|NE) (CMPconst  [0] x))
++((ULE|UGT) (CMPWconst [0] x)) => ((EQ|NE) (CMPWconst [0] x))
++
++((Z|NZ)   sub:(SUB        x y)) && sub.Uses == 1 => ((EQ|NE) (CMP                x y))
++((ZW|NZW) sub:(SUB        x y)) && sub.Uses == 1 => ((EQ|NE) (CMPW               x y))
++((Z|NZ)   sub:(SUBconst [c] y)) && sub.Uses == 1 => ((EQ|NE) (CMPconst         [c] y))
++((ZW|NZW) sub:(SUBconst [c] y)) && sub.Uses == 1 => ((EQ|NE) (CMPWconst [int32(c)] y))
