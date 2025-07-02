@@ -1,0 +1,65 @@
++       // We build the 'after' lists for each of the top blocks Ot and It as a key:
++       //   after[Ot]: Oh, It, Ie
++       //   after[It]: Ih, Ib
+        after := map[ID][]*Block{}
+
++       // Map from loop header ID to the new top block for the loop.
++       tops := map[ID]*Block{}
++
++       // Order loops to rotate any child loop before adding its top block
++       // to the parent loop's `after` list.
++       loopnest.calculateDepths()
++       loopOrder := f.Cache.allocIntSlice(len(loopnest.loops))
++       for i := range loopOrder {
++               loopOrder[i] = i
++       }
++       defer f.Cache.freeIntSlice(loopOrder)
++       slices.SortFunc(loopOrder, func(i, j int) int {
++               di := loopnest.loops[i].depth
++               dj := loopnest.loops[j].depth
++               switch {
++               case di > dj:
++                       return -1
++               case di < dj:
++                       return 1
++               default:
++                       return 0
++               }
++       })
+        // Check each loop header and decide if we want to move it.
+-       for _, loop := range loopnest.loops {
++       for _, loopIdx := range loopOrder {
++               loop := loopnest.loops[loopIdx]
+                b := loop.header
+                var p *Block // b's in-loop predecessor
+                for _, e := range b.Preds {
+@@ -59,6 +117,7 @@ func loopRotate(f *Func) {
+                if p == nil {
+                        continue
+                }
++               tops[loop.header.ID] = p
+                p.Hotness |= HotInitial
+                if f.IsPgoHot {
+                        p.Hotness |= HotPgo
+@@ -80,8 +139,10 @@ func loopRotate(f *Func) {
+                        if nextb == p { // original loop predecessor is next
+                                break
+                        }
+-                       if loopnest.b2l[nextb.ID] == loop {
+-                               after[p.ID] = append(after[p.ID], nextb)
++                       if bloop := loopnest.b2l[nextb.ID]; bloop != nil {
++                               if bloop == loop || bloop.outer == loop && tops[bloop.header.ID] == nextb {
++                                       after[p.ID] = append(after[p.ID], nextb)
++                               }
+                        }
+                        b = nextb
+                }
+@@ -90,7 +151,7 @@ func loopRotate(f *Func) {
+                f.Blocks[idToIdx[p.ID]] = loop.header
+                idToIdx[loop.header.ID], idToIdx[p.ID] = idToIdx[p.ID], idToIdx[loop.header.ID]
+
+-               // Place b after p.
++               // Place loop blocks after p.
+                for _, b := range after[p.ID] {
+                        move[b.ID] = struct{}{}
+                }
