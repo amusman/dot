@@ -215,3 +215,171 @@ index 09384df7bbbd41b21f5bc8340c662d93972c98f1..1f565f16c02ffef45b9ca1d3221517ea
  
  (MemEq _ _ (Const64 [0]) _) => (ConstBool <typ.Bool> [true])
  
+
+
+
+
+
+
+
+diff --git a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+index c333c89ddc44d2d2b0c5abab0f0faa976a0055f6..cb60efae1eeb7e43e9108dcd68b2fb65039f0331 100644
+--- a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+@@ -517,7 +517,7 @@ func init() {
+ 
+ 		// pseudo-ops
+ 		{name: "LoweredNilCheck", argLength: 2, reg: regInfo{inputs: []regMask{gpg}}, nilCheck: true, faultOnNilArg0: true}, // panic if arg0 is nil.  arg1=mem.
+-		{name: "LoweredMemEq", argLength: 4, reg: regInfo{inputs: []regMask{r0, r1, r2}, outputs: []regMask{r0}, clobbers: buildReg("R0 R1 R2 R3 R4 R5 R6 R7 R9 R30 F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11")}, typ: "Bool", faultOnNilArg0: true, faultOnNilArg1: true, clobberFlags: true, call: true}, // arg0, arg1 - pointers to memory, arg2=size, arg3=mem.
++		{name: "LoweredMemEq", argLength: 4, reg: regInfo{inputs: []regMask{r0, r1, r2}, outputs: []regMask{r0}, clobbers: buildReg("R0 R1 R2 R16 R17 R19 R20 R21 R22 R23 R24 R30 F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11")}, typ: "Bool", faultOnNilArg0: true, faultOnNilArg1: true, clobberFlags: true}, // arg0, arg1 - pointers to memory, arg2=size, arg3=mem.
+ 
+ 		{name: "Equal", argLength: 1, reg: readflags},            // bool, true flags encode x==y false otherwise.
+ 		{name: "NotEqual", argLength: 1, reg: readflags},         // bool, true flags encode x!=y false otherwise.
+diff --git a/src/cmd/compile/internal/ssa/opGen.go b/src/cmd/compile/internal/ssa/opGen.go
+index 7383191b7d7a6d83409f7257cfbc88f031d5a444..b1879c033f5bc88e2095bed93c2e65fa735a23e0 100644
+--- a/src/cmd/compile/internal/ssa/opGen.go
++++ b/src/cmd/compile/internal/ssa/opGen.go
+@@ -22861,7 +22861,6 @@ var opcodeTable = [...]opInfo{
+ 		name:           "LoweredMemEq",
+ 		argLen:         4,
+ 		clobberFlags:   true,
+-		call:           true,
+ 		faultOnNilArg0: true,
+ 		faultOnNilArg1: true,
+ 		reg: regInfo{
+@@ -22870,7 +22869,7 @@ var opcodeTable = [...]opInfo{
+ 				{1, 2}, // R1
+ 				{2, 4}, // R2
+ 			},
+-			clobbers: 8794213974783, // R0 R1 R2 R3 R4 R5 R6 R7 R9 R30 F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11
++			clobbers: 8794230685703, // R0 R1 R2 R16 R17 R19 R20 R21 R22 R23 R24 R30 F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11
+ 			outputs: []outputInfo{
+ 				{0, 1}, // R0
+ 			},
+diff --git a/src/internal/bytealg/equal_arm64.s b/src/internal/bytealg/equal_arm64.s
+index 408ab374e629943d5acfb5423fa46be73cf258bb..34832112619d54f9cf221b6e5524d3b768667ba1 100644
+--- a/src/internal/bytealg/equal_arm64.s
++++ b/src/internal/bytealg/equal_arm64.s
+@@ -32,10 +32,10 @@ TEXT runtime·memequal<ABIInternal>(SB),NOSPLIT|NOFRAME,$0-25
+ 	CMP	$16, R2
+ 	// handle specially if length < 16
+ 	BLO	tail
+-	BIC	$0x3f, R2, R3
+-	CBZ	R3, chunk16
++	BIC	$0x3f, R2, R19
++	CBZ	R19, chunk16
+ 	// work with 64-byte chunks
+-	ADD	R3, R0, R6	// end of chunks
++	ADD	R19, R0, R24	// end of chunks
+ chunk64_loop:
+ 	VLD1.P	(R0), [V0.D2, V1.D2, V2.D2, V3.D2]
+ 	VLD1.P	(R1), [V4.D2, V5.D2, V6.D2, V7.D2]
+@@ -46,69 +46,69 @@ chunk64_loop:
+ 	VAND	V8.B16, V9.B16, V8.B16
+ 	VAND	V8.B16, V10.B16, V8.B16
+ 	VAND	V8.B16, V11.B16, V8.B16
+-	CMP	R0, R6
+-	VMOV	V8.D[0], R4
+-	VMOV	V8.D[1], R5
+-	CBZ	R4, not_equal
+-	CBZ	R5, not_equal
++	CMP	R0, R24
++	VMOV	V8.D[0], R20
++	VMOV	V8.D[1], R21
++	CBZ	R20, not_equal
++	CBZ	R21, not_equal
+ 	BNE	chunk64_loop
+ 	AND	$0x3f, R2, R2
+ 	CBZ	R2, equal
+ chunk16:
+ 	// work with 16-byte chunks
+-	BIC	$0xf, R2, R3
+-	CBZ	R3, tail
+-	ADD	R3, R0, R6	// end of chunks
++	BIC	$0xf, R2, R19
++	CBZ	R19, tail
++	ADD	R19, R0, R24	// end of chunks
+ chunk16_loop:
+-	LDP.P	16(R0), (R4, R5)
+-	LDP.P	16(R1), (R7, R9)
+-	EOR	R4, R7
+-	CBNZ	R7, not_equal
+-	EOR	R5, R9
+-	CBNZ	R9, not_equal
+-	CMP	R0, R6
++	LDP.P	16(R0), (R20, R21)
++	LDP.P	16(R1), (R22, R23)
++	EOR	R20, R22
++	CBNZ	R22, not_equal
++	EOR	R21, R23
++	CBNZ	R23, not_equal
++	CMP	R0, R24
+ 	BNE	chunk16_loop
+ 	AND	$0xf, R2, R2
+ 	CBZ	R2, equal
+ tail:
+ 	// special compare of tail with length < 16
+ 	TBZ	$3, R2, lt_8
+-	MOVD	(R0), R4
+-	MOVD	(R1), R5
+-	EOR	R4, R5
+-	CBNZ	R5, not_equal
+-	SUB	$8, R2, R6	// offset of the last 8 bytes
+-	MOVD	(R0)(R6), R4
+-	MOVD	(R1)(R6), R5
+-	EOR	R4, R5
+-	CBNZ	R5, not_equal
++	MOVD	(R0), R20
++	MOVD	(R1), R21
++	EOR	R20, R21
++	CBNZ	R21, not_equal
++	SUB	$8, R2, R24	// offset of the last 8 bytes
++	MOVD	(R0)(R24), R20
++	MOVD	(R1)(R24), R21
++	EOR	R20, R21
++	CBNZ	R21, not_equal
+ 	B	equal
+ 	PCALIGN	$16
+ lt_8:
+ 	TBZ	$2, R2, lt_4
+-	MOVWU	(R0), R4
+-	MOVWU	(R1), R5
+-	EOR	R4, R5
+-	CBNZ	R5, not_equal
+-	SUB	$4, R2, R6	// offset of the last 4 bytes
+-	MOVWU	(R0)(R6), R4
+-	MOVWU	(R1)(R6), R5
+-	EOR	R4, R5
+-	CBNZ	R5, not_equal
++	MOVWU	(R0), R20
++	MOVWU	(R1), R21
++	EOR	R20, R21
++	CBNZ	R21, not_equal
++	SUB	$4, R2, R24	// offset of the last 4 bytes
++	MOVWU	(R0)(R24), R20
++	MOVWU	(R1)(R24), R21
++	EOR	R20, R21
++	CBNZ	R21, not_equal
+ 	B	equal
+ 	PCALIGN	$16
+ lt_4:
+ 	TBZ	$1, R2, lt_2
+-	MOVHU.P	2(R0), R4
+-	MOVHU.P	2(R1), R5
+-	CMP	R4, R5
++	MOVHU.P	2(R0), R20
++	MOVHU.P	2(R1), R21
++	CMP	R20, R21
+ 	BNE	not_equal
+ lt_2:
+ 	TBZ	$0, R2, equal
+ one:
+-	MOVBU	(R0), R4
+-	MOVBU	(R1), R5
+-	CMP	R4, R5
++	MOVBU	(R0), R20
++	MOVBU	(R1), R21
++	CMP	R20, R21
+ 	BNE	not_equal
+ equal:
+ 	MOVD	$1, R0
