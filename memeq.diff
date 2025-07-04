@@ -1,0 +1,217 @@
+diff --git a/src/cmd/compile/internal/arm64/ssa.go b/src/cmd/compile/internal/arm64/ssa.go
+index 753cef743b33cc719e8b84c9f5a9b8992e709c4b..fdda425900b21de1e914ff18dad144b25b9fda50 100644
+--- a/src/cmd/compile/internal/arm64/ssa.go
++++ b/src/cmd/compile/internal/arm64/ssa.go
+@@ -1121,6 +1121,11 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+ 		p.To.Name = obj.NAME_EXTERN
+ 		// AuxInt encodes how many buffer entries we need.
+ 		p.To.Sym = ir.Syms.GCWriteBarrier[v.AuxInt-1]
++	case ssa.OpARM64LoweredMemEq:
++		p := s.Prog(obj.ACALL)
++		p.To.Type = obj.TYPE_MEM
++		p.To.Name = obj.NAME_EXTERN
++		p.To.Sym = ir.Syms.Memequal
+ 
+ 	case ssa.OpARM64LoweredPanicBoundsA, ssa.OpARM64LoweredPanicBoundsB, ssa.OpARM64LoweredPanicBoundsC:
+ 		p := s.Prog(obj.ACALL)
+diff --git a/src/cmd/compile/internal/ir/symtab.go b/src/cmd/compile/internal/ir/symtab.go
+index e2da710f025878c12b602e1e23945f4b8c501e11..61c8c0c8bd2a2c633fabe84fba61a9e7374b0650 100644
+--- a/src/cmd/compile/internal/ir/symtab.go
++++ b/src/cmd/compile/internal/ir/symtab.go
+@@ -32,6 +32,7 @@ type symsStruct struct {
+ 	InterfaceSwitch   *obj.LSym
+ 	MallocGC          *obj.LSym
+ 	Memmove           *obj.LSym
++	Memequal          *obj.LSym
+ 	Msanread          *obj.LSym
+ 	Msanwrite         *obj.LSym
+ 	Msanmove          *obj.LSym
+diff --git a/src/cmd/compile/internal/ssa/_gen/ARM64.rules b/src/cmd/compile/internal/ssa/_gen/ARM64.rules
+index 01fe3a74f7d551b25afc870ad858755a766dfd05..e73f98b4d4faa036970b45029d9f714ea620e858 100644
+--- a/src/cmd/compile/internal/ssa/_gen/ARM64.rules
++++ b/src/cmd/compile/internal/ssa/_gen/ARM64.rules
+@@ -532,6 +532,9 @@
+ 		(ADDconst <src.Type> src [s-16])
+ 		mem)
+ 
++// mem ops
++(MemEq ...) => (LoweredMemEq ...)
++
+ // calls
+ (StaticCall  ...) => (CALLstatic  ...)
+ (ClosureCall ...) => (CALLclosure ...)
+diff --git a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+index ebb7ed52997c43e46234338f3d1a07454c990dab..c333c89ddc44d2d2b0c5abab0f0faa976a0055f6 100644
+--- a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+@@ -517,6 +517,7 @@ func init() {
+ 
+ 		// pseudo-ops
+ 		{name: "LoweredNilCheck", argLength: 2, reg: regInfo{inputs: []regMask{gpg}}, nilCheck: true, faultOnNilArg0: true}, // panic if arg0 is nil.  arg1=mem.
++		{name: "LoweredMemEq", argLength: 4, reg: regInfo{inputs: []regMask{r0, r1, r2}, outputs: []regMask{r0}, clobbers: buildReg("R0 R1 R2 R3 R4 R5 R6 R7 R9 R30 F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11")}, typ: "Bool", faultOnNilArg0: true, faultOnNilArg1: true, clobberFlags: true, call: true}, // arg0, arg1 - pointers to memory, arg2=size, arg3=mem.
+ 
+ 		{name: "Equal", argLength: 1, reg: readflags},            // bool, true flags encode x==y false otherwise.
+ 		{name: "NotEqual", argLength: 1, reg: readflags},         // bool, true flags encode x!=y false otherwise.
+diff --git a/src/cmd/compile/internal/ssa/_gen/generic.rules b/src/cmd/compile/internal/ssa/_gen/generic.rules
+index b178a1add6de29eb2181106a311dd7ac0fd0a099..09384df7bbbd41b21f5bc8340c662d93972c98f1 100644
+--- a/src/cmd/compile/internal/ssa/_gen/generic.rules
++++ b/src/cmd/compile/internal/ssa/_gen/generic.rules
+@@ -2152,6 +2152,48 @@
+   && isSamePtr(p, q)
+   => (MakeResult (ConstBool <typ.Bool> [true]) mem)
+ 
++(MemEq sptr (Addr {scon} (SB)) (Const64 [1]) mem)
++  && symIsRO(scon)
++  => (Eq8 (Load <typ.Int8> sptr mem) (Const8 <typ.Int8> [int8(read8(scon,0))]))
++
++(MemEq (Addr {scon} (SB)) sptr (Const64 [1]) mem)
++  && symIsRO(scon)
++  => (Eq8 (Load <typ.Int8> sptr mem) (Const8 <typ.Int8> [int8(read8(scon,0))]))
++
++(MemEq sptr (Addr {scon} (SB)) (Const64 [2]) mem)
++  && symIsRO(scon)
++  && canLoadUnaligned(config)
++  => (Eq16 (Load <typ.Int16> sptr mem) (Const16 <typ.Int16> [int16(read16(scon,0,config.ctxt.Arch.ByteOrder))]))
++
++(MemEq (Addr {scon} (SB)) sptr (Const64 [2]) mem)
++  && symIsRO(scon)
++  && canLoadUnaligned(config)
++  => (Eq16 (Load <typ.Int16> sptr mem) (Const16 <typ.Int16> [int16(read16(scon,0,config.ctxt.Arch.ByteOrder))]))
++
++(MemEq sptr (Addr {scon} (SB)) (Const64 [4]) mem)
++  && symIsRO(scon)
++  && canLoadUnaligned(config)
++  => (Eq32 (Load <typ.Int32> sptr mem) (Const32 <typ.Int32> [int32(read32(scon,0,config.ctxt.Arch.ByteOrder))]))
++
++(MemEq (Addr {scon} (SB)) sptr (Const64 [4]) mem)
++  && symIsRO(scon)
++  && canLoadUnaligned(config)
++  => (Eq32 (Load <typ.Int32> sptr mem) (Const32 <typ.Int32> [int32(read32(scon,0,config.ctxt.Arch.ByteOrder))]))
++
++(MemEq sptr (Addr {scon} (SB)) (Const64 [8]) mem)
++  && symIsRO(scon)
++  && canLoadUnaligned(config) && config.PtrSize == 8
++  => (Eq64 (Load <typ.Int64> sptr mem) (Const64 <typ.Int64> [int64(read64(scon,0,config.ctxt.Arch.ByteOrder))]))
++
++(MemEq (Addr {scon} (SB)) sptr (Const64 [8]) mem)
++  && symIsRO(scon)
++  && canLoadUnaligned(config) && config.PtrSize == 8
++  => (Eq64 (Load <typ.Int64> sptr mem) (Const64 <typ.Int64> [int64(read64(scon,0,config.ctxt.Arch.ByteOrder))]))
++
++(MemEq _ _ (Const64 [0]) _) => (ConstBool <typ.Bool> [true])
++
++(MemEq p q _ _) && isSamePtr(p, q) => (ConstBool <typ.Bool> [true])
++
+ // Turn known-size calls to memclrNoHeapPointers into a Zero.
+ // Note that we are using types.Types[types.TUINT8] instead of sptr.Type.Elem() - see issue 55122 and CL 431496 for more details.
+ (SelectN [0] call:(StaticCall {sym} sptr (Const(64|32) [c]) mem))
+diff --git a/src/cmd/compile/internal/ssa/_gen/genericOps.go b/src/cmd/compile/internal/ssa/_gen/genericOps.go
+index 1f6ad4e16d98f8803ed54473ac360db487bb2b48..3eb65166af64efc29d7aea1042437ecf7080ec9e 100644
+--- a/src/cmd/compile/internal/ssa/_gen/genericOps.go
++++ b/src/cmd/compile/internal/ssa/_gen/genericOps.go
+@@ -662,6 +662,9 @@ var genericOps = []opData{
+ 	// Prefetch instruction
+ 	{name: "PrefetchCache", argLength: 2, hasSideEffects: true},         // Do prefetch arg0 to cache. arg0=addr, arg1=memory.
+ 	{name: "PrefetchCacheStreamed", argLength: 2, hasSideEffects: true}, // Do non-temporal or streamed prefetch arg0 to cache. arg0=addr, arg1=memory.
++
++	// Helper instruction which is equivalent to runtime.memequal, but can be sometimes lowered more efficiently.
++	{name: "MemEq", argLength: 4, typ: "Bool"}, // arg0=ptr0, arg1=ptr1, arg2=size, arg3=memory.
+ }
+ 
+ //     kind          controls          successors   implicit exit
+
+diff --git a/src/cmd/compile/internal/ssagen/intrinsics.go b/src/cmd/compile/internal/ssagen/intrinsics.go
+index 6b58e7e5914538de18baaf04a507bd925147f888..6a8ef4320f52295ffde73ee637396faaef03f894 100644
+--- a/src/cmd/compile/internal/ssagen/intrinsics.go
++++ b/src/cmd/compile/internal/ssagen/intrinsics.go
+@@ -195,6 +195,14 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
+ 		},
+ 		sys.AMD64, sys.I386, sys.ARM64, sys.ARM, sys.Loong64, sys.S390X)
+ 
++	if base.Flag.MemOp != 0 {
++		addF("runtime", "memequal",
++			func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
++				return s.newValue4(ssa.OpMemEq, s.f.Config.Types.Bool, args[0], args[1], args[2], s.mem())
++			},
++			sys.ARM64)
++	}
++
+ 	if cfg.goppc64 >= 10 {
+ 		// Use only on Power10 as the new byte reverse instructions that Power10 provide
+ 		// make it worthwhile as an intrinsic
+diff --git a/src/cmd/compile/internal/ssagen/ssa.go b/src/cmd/compile/internal/ssagen/ssa.go
+index e241e9b9bc0f4f86c64d98ac759dc69390f1efdf..82db4b93648036cb4eb6ccaca460c534f1e514a4 100644
+--- a/src/cmd/compile/internal/ssagen/ssa.go
++++ b/src/cmd/compile/internal/ssagen/ssa.go
+@@ -130,6 +130,7 @@ func InitConfig() {
+ 	ir.Syms.InterfaceSwitch = typecheck.LookupRuntimeFunc("interfaceSwitch")
+ 	ir.Syms.MallocGC = typecheck.LookupRuntimeFunc("mallocgc")
+ 	ir.Syms.Memmove = typecheck.LookupRuntimeFunc("memmove")
++	ir.Syms.Memequal = typecheck.LookupRuntimeFunc("memequal")
+ 	ir.Syms.Msanread = typecheck.LookupRuntimeFunc("msanread")
+ 	ir.Syms.Msanwrite = typecheck.LookupRuntimeFunc("msanwrite")
+ 	ir.Syms.Msanmove = typecheck.LookupRuntimeFunc("msanmove")
+diff --git a/src/cmd/compile/internal/ssa/_gen/generic.rules b/src/cmd/compile/internal/ssa/_gen/generic.rules
+index 09384df7bbbd41b21f5bc8340c662d93972c98f1..1f565f16c02ffef45b9ca1d3221517eac54d4a13 100644
+--- a/src/cmd/compile/internal/ssa/_gen/generic.rules
++++ b/src/cmd/compile/internal/ssa/_gen/generic.rules
+@@ -2152,43 +2152,36 @@
+   && isSamePtr(p, q)
+   => (MakeResult (ConstBool <typ.Bool> [true]) mem)
+ 
+-(MemEq sptr (Addr {scon} (SB)) (Const64 [1]) mem)
+-  && symIsRO(scon)
+-  => (Eq8 (Load <typ.Int8> sptr mem) (Const8 <typ.Int8> [int8(read8(scon,0))]))
++(MemEq sptr tptr (Const64 [1]) mem)
++  => (Eq8 (Load <typ.Int8> sptr mem) (Load <typ.Int8> tptr mem))
+ 
+-(MemEq (Addr {scon} (SB)) sptr (Const64 [1]) mem)
++(Load <typ.Int8> sptr:(Addr {scon} (SB)) mem)
+   && symIsRO(scon)
+-  => (Eq8 (Load <typ.Int8> sptr mem) (Const8 <typ.Int8> [int8(read8(scon,0))]))
++  => (Const8 <typ.Int8> [int8(read8(scon,0))])
+ 
+-(MemEq sptr (Addr {scon} (SB)) (Const64 [2]) mem)
+-  && symIsRO(scon)
++(MemEq sptr tptr (Const64 [2]) mem)
+   && canLoadUnaligned(config)
+-  => (Eq16 (Load <typ.Int16> sptr mem) (Const16 <typ.Int16> [int16(read16(scon,0,config.ctxt.Arch.ByteOrder))]))
++  => (Eq16 (Load <typ.Int16> sptr mem) (Load <typ.Int16> tptr mem))
+ 
+-(MemEq (Addr {scon} (SB)) sptr (Const64 [2]) mem)
++(Load <typ.Int16> sptr:(Addr {scon} (SB)) mem)
+   && symIsRO(scon)
+-  && canLoadUnaligned(config)
+-  => (Eq16 (Load <typ.Int16> sptr mem) (Const16 <typ.Int16> [int16(read16(scon,0,config.ctxt.Arch.ByteOrder))]))
++  => (Const16 <typ.Int16> [int16(read16(scon,0,config.ctxt.Arch.ByteOrder))])
+ 
+-(MemEq sptr (Addr {scon} (SB)) (Const64 [4]) mem)
+-  && symIsRO(scon)
++(MemEq sptr tptr (Const64 [4]) mem)
+   && canLoadUnaligned(config)
+-  => (Eq32 (Load <typ.Int32> sptr mem) (Const32 <typ.Int32> [int32(read32(scon,0,config.ctxt.Arch.ByteOrder))]))
++  => (Eq32 (Load <typ.Int32> sptr mem) (Load <typ.Int32> tptr mem))
+ 
+-(MemEq (Addr {scon} (SB)) sptr (Const64 [4]) mem)
++(Load <typ.Int32> sptr:(Addr {scon} (SB)) mem)
+   && symIsRO(scon)
+-  && canLoadUnaligned(config)
+-  => (Eq32 (Load <typ.Int32> sptr mem) (Const32 <typ.Int32> [int32(read32(scon,0,config.ctxt.Arch.ByteOrder))]))
++  => (Const32 <typ.Int32> [int32(read32(scon,0,config.ctxt.Arch.ByteOrder))])
+ 
+-(MemEq sptr (Addr {scon} (SB)) (Const64 [8]) mem)
+-  && symIsRO(scon)
++(MemEq sptr tptr (Const64 [8]) mem)
+   && canLoadUnaligned(config) && config.PtrSize == 8
+-  => (Eq64 (Load <typ.Int64> sptr mem) (Const64 <typ.Int64> [int64(read64(scon,0,config.ctxt.Arch.ByteOrder))]))
++  => (Eq64 (Load <typ.Int64> sptr mem) (Load <typ.Int64> tptr mem))
+ 
+-(MemEq (Addr {scon} (SB)) sptr (Const64 [8]) mem)
++(Load <typ.Int64> sptr:(Addr {scon} (SB)) mem)
+   && symIsRO(scon)
+-  && canLoadUnaligned(config) && config.PtrSize == 8
+-  => (Eq64 (Load <typ.Int64> sptr mem) (Const64 <typ.Int64> [int64(read64(scon,0,config.ctxt.Arch.ByteOrder))]))
++  => (Const64 <typ.Int64> [int64(read64(scon,0,config.ctxt.Arch.ByteOrder))])
+ 
+ (MemEq _ _ (Const64 [0]) _) => (ConstBool <typ.Bool> [true])
+ 
