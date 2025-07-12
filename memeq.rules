@@ -1,0 +1,56 @@
+// some common constant sized memeq not handled in generic opt
+(LoweredMemEq p q (MOVDconst [3]) mem) => (Equal (CMPconst [0]
+                                                 (OR <typ.UInt64> (XOR <typ.UInt64> (MOVHUload     p mem) (MOVHUload     q mem))
+                                                                  (XOR <typ.UInt64> (MOVBUload [2] p mem) (MOVBUload [2] q mem)))))
+(LoweredMemEq p q (MOVDconst [5]) mem) => (Equal (CMPconst [0]
+                                                 (OR <typ.UInt64> (XOR <typ.UInt64> (MOVWUload     p mem) (MOVWUload     q mem))
+                                                                  (XOR <typ.UInt64> (MOVBUload [4] p mem) (MOVBUload [4] q mem)))))
+(LoweredMemEq p q (MOVDconst [6]) mem) => (Equal (CMPconst [0]
+                                                 (OR <typ.UInt64> (XOR <typ.UInt64> (MOVWUload     p mem) (MOVWUload     q mem))
+                                                                  (XOR <typ.UInt64> (MOVHUload [4] p mem) (MOVHUload [4] q mem)))))
+(LoweredMemEq p q (MOVDconst [7]) mem) => (Equal (CMPconst [0]
+                                                 (OR <typ.UInt64> (XOR <typ.UInt64> (MOVWUload     p mem) (MOVWUload     q mem))
+                                                                  (XOR <typ.UInt64> (MOVWUload [3] p mem) (MOVWUload [3] q mem)))))
+(LoweredMemEq p q (MOVDconst [9]) mem) => (Equal (CMPconst [0]
+                                                 (OR <typ.UInt64> (XOR <typ.UInt64> (MOVDload      p mem) (MOVDload      q mem))
+                                                                  (XOR <typ.UInt64> (MOVBUload [8] p mem) (MOVBUload [8] q mem)))))
+(LoweredMemEq p q (MOVDconst [10]) mem) => (Equal (CMPconst [0]
+                                                  (OR <typ.UInt64> (XOR <typ.UInt64> (MOVDload      p mem) (MOVDload      q mem))
+                                                                   (XOR <typ.UInt64> (MOVHUload [8] p mem) (MOVHUload [8] q mem)))))
+(LoweredMemEq p q (MOVDconst [11]) mem) => (Equal (CMPconst [0]
+                                                  (OR <typ.UInt64> (XOR <typ.UInt64> (MOVDload      p mem) (MOVDload      q mem))
+                                                                   (XOR <typ.UInt64> (MOVWUload [7] p mem) (MOVWUload [7] q mem)))))
+(LoweredMemEq p q (MOVDconst [12]) mem) => (Equal (CMPconst [0]
+                                                  (OR <typ.UInt64> (XOR <typ.UInt64> (MOVDload      p mem) (MOVDload      q mem))
+                                                                   (XOR <typ.UInt64> (MOVWUload [8] p mem) (MOVWUload [8] q mem)))))
+(LoweredMemEq p q (MOVDconst [13]) mem) => (Equal (CMPconst [0]
+                                                  (OR <typ.UInt64> (XOR <typ.UInt64> (MOVDload      p mem) (MOVDload      q mem))
+                                                                   (XOR <typ.UInt64> (MOVDload  [5] p mem) (MOVDload  [5] q mem)))))
+(LoweredMemEq p q (MOVDconst [14]) mem) => (Equal (CMPconst [0]
+                                                  (OR <typ.UInt64> (XOR <typ.UInt64> (MOVDload      p mem) (MOVDload      q mem))
+                                                                   (XOR <typ.UInt64> (MOVDload  [6] p mem) (MOVDload  [6] q mem)))))
+(LoweredMemEq p q (MOVDconst [15]) mem) => (Equal (CMPconst [0]
+                                                  (OR <typ.UInt64> (XOR <typ.UInt64> (MOVDload      p mem) (MOVDload      q mem))
+                                                                   (XOR <typ.UInt64> (MOVDload  [7] p mem) (MOVDload  [7] q mem)))))
+(LoweredMemEq p q (MOVDconst [16]) mem) => (Equal (CMPconst [0]
+                                                  (OR <typ.UInt64> (XOR <typ.UInt64> (MOVDload      p mem) (MOVDload      q mem))
+                                                                   (XOR <typ.UInt64> (MOVDload  [8] p mem) (MOVDload  [8] q mem)))))
+(LoweredMemEq p q (MOVDconst [17]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVBUload [16] p mem) (MOVBUload [16] q mem)))))
+(LoweredMemEq p q (MOVDconst [18]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVHUload [16] p mem) (MOVHUload [16] q mem)))))
+(LoweredMemEq p q (MOVDconst [19]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVWUload [15] p mem) (MOVWUload [15] q mem)))))
+(LoweredMemEq p q (MOVDconst [20]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVWUload [16] p mem) (MOVWUload [16] q mem)))))
+(LoweredMemEq p q (MOVDconst [21]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVDload [13]  p mem) (MOVDload [13]  q mem)))))
+(LoweredMemEq p q (MOVDconst [22]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVDload [14]  p mem) (MOVDload [14]  q mem)))))
+(LoweredMemEq p q (MOVDconst [23]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVDload [15]  p mem) (MOVDload [15]  q mem)))))
+(LoweredMemEq p q (MOVDconst [24]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVDload [16]  p mem) (MOVDload [16]  q mem)))))
+(LoweredMemEq p q (MOVDconst [c]) mem) && c > 24 && c <= 32 => (AndB
+                                                                   (LoweredMemEq                       p                        q  (MOVDconst [16]) mem)
+                                                                   (LoweredMemEq (OffPtr <p.Type> [16] p) (OffPtr <q.Type> [16] q) (MOVDconst [c - 16]) mem))
