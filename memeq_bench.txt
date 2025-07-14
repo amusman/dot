@@ -1,0 +1,28 @@
+shortname: minio
+pkg: github.com/minio/minio/cmd
+                               │  Orig.res   │              Uexp.res              │
+                               │   sec/op    │   sec/op     vs base               │
+DecodehealingTracker-4           834.4n ± 1%   797.6n ± 2%  -4.42% (p=0.000 n=10)
+AppendMsgResyncTargetsInfo-4     8.472n ± 0%   8.472n ± 0%       ~ (p=0.546 n=10)
+DataUpdateTracker-4              2.792µ ± 3%   2.777µ ± 2%       ~ (p=0.403 n=10)
+MarshalMsgdataUsageCacheInfo-4   130.2n ± 0%   130.1n ± 1%       ~ (p=0.752 n=10)
+geomean                          225.2n        222.3n       -1.27%
+
+                       │ orig.results │            uexp.results            │
+                       │    sec/op    │   sec/op     vs base               │
+BleveIndexBatch100-4       7.659 ± 1%    7.662 ± 1%       ~ (p=0.739 n=10)
+ESBuildThreeJS-4          825.3m ± 0%   823.6m ± 0%       ~ (p=0.280 n=10)
+ESBuildRomeTS-4           213.1m ± 1%   213.4m ± 2%       ~ (p=0.971 n=10)
+EtcdPut-4                 58.35m ± 1%   58.55m ± 1%       ~ (p=0.796 n=10)
+EtcdSTM-4                 305.3m ± 1%   304.4m ± 1%       ~ (p=0.143 n=10)
+GoBuildKubelet-4           163.2 ± 0%    162.7 ± 0%  -0.32% (p=0.000 n=10)
+GoBuildKubeletLink-4       13.13 ± 0%    13.11 ± 0%       ~ (p=0.063 n=10)
+GoBuildIstioctl-4          127.3 ± 0%    127.0 ± 0%       ~ (p=0.105 n=10)
+GoBuildIstioctlLink-4      9.199 ± 1%    9.154 ± 0%  -0.49% (p=0.003 n=10)
+GoBuildFrontend-4          49.20 ± 0%    49.09 ± 0%  -0.23% (p=0.029 n=10)
+GoBuildFrontendLink-4      2.364 ± 1%    2.359 ± 1%       ~ (p=0.190 n=10)
+GopherLuaKNucleotide-4     38.42 ± 1%    38.00 ± 1%  -1.09% (p=0.000 n=10)
+MarkdownRenderXHTML-4     289.6m ± 0%   286.8m ± 0%  -0.98% (p=0.000 n=10)
+Tile38QueryLoad-4         711.5µ ± 0%   710.6µ ± 1%       ~ (p=0.143 n=10)
+geomean                    2.182         2.176       -0.28%
+
