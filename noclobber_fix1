@@ -1,0 +1,116 @@
+diff --git a/src/cmd/compile/internal/ir/sizeof_test.go b/src/cmd/compile/internal/ir/sizeof_test.go
+index 8ddbb969c3c262aa421739a9cd7802e787456992..8dace1ac9a551c8b6b6e1818d8a68eb9d0c6b95e 100644
+--- a/src/cmd/compile/internal/ir/sizeof_test.go
++++ b/src/cmd/compile/internal/ir/sizeof_test.go
+@@ -20,7 +20,7 @@ func TestSizeof(t *testing.T) {
+ 		_32bit uintptr     // size on 32bit platforms
+ 		_64bit uintptr     // size on 64bit platforms
+ 	}{
+-		{Func{}, 192, 312},
++		{Func{}, 192, 320},
+ 		{Name{}, 96, 160},
+ 		{miniExpr{}, 32, 48},
+ 		{miniNode{}, 12, 12},
+diff --git a/src/cmd/compile/internal/noder/linker.go b/src/cmd/compile/internal/noder/linker.go
+index 4228ff2ecef37f0e5952eeeb152b995ba6ed8ff7..d0acdd3558996b6f01d87d7e474f1f42cd2e7fdb 100644
+--- a/src/cmd/compile/internal/noder/linker.go
++++ b/src/cmd/compile/internal/noder/linker.go
+@@ -293,6 +293,10 @@ func (l *linker) relocFuncExt(w *pkgbits.Encoder, name *ir.Name) {
+ 	// common functions implemented in assembly (e.g., bytealg).
+ 	w.Uint64(uint64(name.Func.ABI))
+ 	w.Uint64(uint64(name.Func.AsmNoClobber))
++	if base.Debug.ClobberSet > 1 {
++		fn := name.Func
++		base.WarnfAt(fn.Pos(), "Clobber sets saved for %v:  0x%016x", fn, uint64(fn.AsmNoClobber))
++	}
+ 
+ 	// Escape analysis.
+ 	for _, f := range name.Type().RecvParams() {
+diff --git a/src/cmd/compile/internal/noder/reader.go b/src/cmd/compile/internal/noder/reader.go
+index 50096ba7e0b7a11b2a965068c60d733cfa1d0a51..295cea5a987f5b9ec1275e6a378bdb5184f2df8e 100644
+--- a/src/cmd/compile/internal/noder/reader.go
++++ b/src/cmd/compile/internal/noder/reader.go
+@@ -1189,6 +1189,9 @@ func (r *reader) funcExt(name *ir.Name, method *types.Sym) {
+ 
+ 		fn.ABI = obj.ABI(r.Uint64())
+ 		fn.AsmNoClobber = r.Uint64()
++		if base.Debug.ClobberSet > 1 {
++			base.WarnfAt(fn.Pos(), "Clobber sets read for %v:  0x%016x", fn, uint64(fn.AsmNoClobber))
++		}
+ 
+ 		// Escape analysis.
+ 		for _, f := range name.Type().RecvParams() {
+diff --git a/src/cmd/compile/internal/ssa/regalloc.go b/src/cmd/compile/internal/ssa/regalloc.go
+index c869d1919d40d287e187955dc6342e19f81f9824..be1dea376f2e5f4f57714f3de8806cdab8c1b5e0 100644
+--- a/src/cmd/compile/internal/ssa/regalloc.go
++++ b/src/cmd/compile/internal/ssa/regalloc.go
+@@ -1011,21 +1011,13 @@ func (s *regAllocState) regalloc(f *Func) {
+ 				// If there's any register not in regspec.clobber, it's safe to keep even pointer there:
+ 				// the callee is nosplit asm runtime function explicitly marked as preserving registers.
+ 				regspec := s.regspec(v)
+-				var toClobber []ID
+-				for _, vid := range regValLiveSet.contents() {
+-					if home := s.f.getHome(vid); home != nil {
+-						if reg, ok := home.(*Register); ok {
+-							if regspec.clobbers&(regMask(1)<<uint(reg.num)) != 0 {
+-								toClobber = append(toClobber, vid)
+-							}
+-						}
+-					}
+-				}
+-				for _, vid := range toClobber {
+-					regValLiveSet.remove(vid)
+-				}
+-				if regValLiveSet.size() == 0 {
++				if regspec.clobbers == opcodeTable[v.Op].reg.clobbers {
++					regValLiveSet.clear()
+ 					nextCall = int32(i)
++				} else if s.f.pass.debug > regDebug {
++					fmt.Printf("call preserves regs: %v\n", v.LongString())
++					fmt.Printf(" - mask1: 0x%016x\n", uint64(regspec.clobbers))
++					fmt.Printf(" - mask0: 0x%016x\n", uint64(opcodeTable[v.Op].reg.clobbers))
+ 				}
+ 				// Always keep SP and SB live regardless of clobber mask
+ 				if s.sp != 0 && s.values[s.sp].uses != nil {
+@@ -2784,9 +2776,12 @@ func (s *regAllocState) computeLive() {
+ 					continue
+ 				}
+ 				if opcodeTable[v.Op].call {
+-					c := live.contents()
+-					for i := range c {
+-						c[i].val += unlikelyDistance
++					regspec := s.regspec(v)
++					if regspec.clobbers == opcodeTable[v.Op].reg.clobbers {
++						c := live.contents()
++						for i := range c {
++							c[i].val += unlikelyDistance
++						}
+ 					}
+ 				}
+ 				for _, a := range v.Args {
+diff --git a/src/internal/bytealg/equal_arm64.s b/src/internal/bytealg/equal_arm64.s
+index 408ab374e629943d5acfb5423fa46be73cf258bb..29a8566c7a3670d52747ca09c9542a661931fcc6 100644
+--- a/src/internal/bytealg/equal_arm64.s
++++ b/src/internal/bytealg/equal_arm64.s
+@@ -20,7 +20,7 @@ eq:
+ // R2: data len
+ // at return: result in R0
+ // memequal(a, b unsafe.Pointer, size uintptr) bool
+-TEXT runtime·memequal<ABIInternal>(SB),NOSPLIT|NOFRAME,$0-25
++TEXT runtime·memequal<ABIInternal>{clobber R0 R1 R2 R3 R4 R5 R6 R7 R9}(SB),NOSPLIT|NOFRAME,$0-25
+ 	// short path to handle 0-byte case
+ 	CBZ     R2, equal
+ 	// short path to handle equal pointers
+diff --git a/src/runtime/memmove_arm64.s b/src/runtime/memmove_arm64.s
+index 8ec3ed86b9b9f6faf7ffe6cf68d796d8cb164cc8..0e8297b00934f6b8133545fee7849884d5028aa4 100644
+--- a/src/runtime/memmove_arm64.s
++++ b/src/runtime/memmove_arm64.s
+@@ -26,7 +26,7 @@
+ // The loop tail is handled by always copying 64 bytes from the end.
+ 
+ // func memmove(to, from unsafe.Pointer, n uintptr)
+-TEXT runtime·memmove<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-24
++TEXT runtime·memmove<ABIInternal>{clobber R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17}(SB), NOSPLIT|NOFRAME, $0-24
+ 	CBZ	R2, copy0
+ 
+ 	// Small copies: 1..16 bytes
