@@ -1,0 +1,73 @@
+diff --git a/src/cmd/vendor/golang.org/x/tools/go/analysis/passes/asmdecl/asmdecl.go b/src/cmd/vendor/golang.org/x/tools/go/analysis/passes/asmdecl/asmdecl.go
+index 1aa7afb9c2..055c07b62b 100644
+--- a/src/cmd/vendor/golang.org/x/tools/go/analysis/passes/asmdecl/asmdecl.go
++++ b/src/cmd/vendor/golang.org/x/tools/go/analysis/passes/asmdecl/asmdecl.go
+@@ -147,7 +147,7 @@ var (
+        asmSP        = re(`[^+\-0-9](([0-9]+)\(([A-Z0-9]+)\))`)
+        asmOpcode    = re(`^\s*(?:[A-Z0-9a-z_]+:)?\s*([A-Z]+)\s*([^,]*)(?:,\s*(.*))?`)
+        ppc64Suff    = re(`([BHWD])(ZU|Z|U|BR)?$`)
+-       abiSuff      = re(`^(.+)<(ABI.+)>$`)
++       abiSuff      = re(`^(.+)<(ABI.+)>(?:\{[^}]*\})?$`)
+ )
+
+ func run(pass *analysis.Pass) (any, error) {
+
+diff --git a/src/cmd/compile/internal/ssa/_gen/main.go b/src/cmd/compile/internal/ssa/_gen/main.go
+index 055316e5cc..a6c61a8b98 100644
+--- a/src/cmd/compile/internal/ssa/_gen/main.go
++++ b/src/cmd/compile/internal/ssa/_gen/main.go
+@@ -42,13 +42,18 @@ type arch struct {
+        fp32regmask        regMask
+        fp64regmask        regMask
+        specialregmask     regMask
+-       clobberSets        map[string]regMask
++       clobberSets        []clobberSetEntry
+        framepointerreg    int8
+        linkreg            int8
+        generic            bool
+        imports            []string
+ }
+
++type clobberSetEntry struct {
++       name string
++       mask regMask
++}
++
+ type opData struct {
+        name              string
+        reg               regInfo
+@@ -495,8 +500,8 @@ func genOp() {
+                fmt.Fprintf(w, "var fpRegMask%s = regMask(%d)\n", a.name, a.fpregmask)
+                if len(a.clobberSets) > 0 {
+                        fmt.Fprintf(w, "var clobberSets%s = map[string]regMask{\n", a.name)
+-                       for funcName, mask := range a.clobberSets {
+-                               fmt.Fprintf(w, "\t%q: regMask(%d),\n", funcName, mask)
++                       for _, cs := range a.clobberSets {
++                               fmt.Fprintf(w, "\t%q: regMask(%d),\n", cs.name, cs.mask)
+                        }
+                        fmt.Fprintf(w, "}\n")
+                }
+
+diff --git a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+index 825a4f1c39..76432da6bc 100644
+--- a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+@@ -826,12 +826,12 @@ func init() {
+                ParamFloatRegNames: "F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15",
+                gpregmask:          gp,
+                fpregmask:          fp,
+-               clobberSets: map[string]regMask{
+-                       "minimal":                      callClobber,
+-                       "default":                      callerSave,
+-                       "runtime.memmove":              memmoveClobber,
+-                       "runtime.memclrNoHeapPointers": memclrNoHeapPointersClobber,
+-                       "runtime.memequal":             memequalClobber,
++               clobberSets: []clobberSetEntry{
++                       {"minimal", callClobber},
++                       {"default", callerSave},
++                       {"runtime.memmove", memmoveClobber},
++                       {"runtime.memclrNoHeapPointers", memclrNoHeapPointersClobber},
++                       {"runtime.memequal", memequalClobber},
+                },
+                framepointerreg: -1, // not used
+                linkreg:         int8(num["R30"]),
