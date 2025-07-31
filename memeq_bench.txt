@@ -1,3 +1,34 @@
+New:
+shortname: minio
+pkg: github.com/minio/minio/cmd
+                               │  Orig.res   │              Uexp.res              │
+                               │   sec/op    │   sec/op     vs base               │
+DecodehealingTracker-4           842.5n ± 1%   794.0n ± 3%  -5.75% (p=0.000 n=10)
+AppendMsgResyncTargetsInfo-4     8.472n ± 0%   8.472n ± 0%       ~ (p=0.582 n=10)
+DataUpdateTracker-4              2.856µ ± 2%   2.804µ ± 3%       ~ (p=0.210 n=10)
+MarshalMsgdataUsageCacheInfo-4   131.2n ± 1%   131.6n ± 2%       ~ (p=0.494 n=10)
+geomean                          227.4n        223.2n       -1.86%
+
+                             │   Orig.res   │              Uexp.res               │
+                             │     B/s      │     B/s       vs base               │
+DecodehealingTracker-4         352.0Mi ± 1%   373.5Mi ± 3%  +6.10% (p=0.000 n=10)
+AppendMsgResyncTargetsInfo-4   1.099Gi ± 0%   1.099Gi ± 0%       ~ (p=0.183 n=10)
+DataUpdateTracker-4            341.8Ki ± 3%   351.6Ki ± 3%       ~ (p=0.286 n=10)
+geomean                        50.95Mi        52.46Mi       +2.96%
+
+                               │   Orig.res   │              Uexp.res               │
+                               │     B/op     │    B/op     vs base                 │
+DecodehealingTracker-4           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+AppendMsgResyncTargetsInfo-4     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+DataUpdateTracker-4              224.5 ± 0%     224.5 ± 0%       ~ (p=1.000 n=10)
+MarshalMsgdataUsageCacheInfo-4   96.00 ± 0%     96.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                     ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+
+
+Old:
 shortname: minio
 pkg: github.com/minio/minio/cmd
                                │  Orig.res   │              Uexp.res              │
