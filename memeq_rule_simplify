@@ -1,0 +1,66 @@
+--- a/src/cmd/compile/internal/ssa/rewrite.go
++++ b/src/cmd/compile/internal/ssa/rewrite.go
+@@ -2699,3 +2699,36 @@ func panicBoundsCToAux(p PanicBoundsC) Aux {
+ func panicBoundsCCToAux(p PanicBoundsCC) Aux {
+        return p
+ }
++
++func chunk(size int64, returnRight bool, typ *Types) *types.Type {
++       if size > 16 {
++               return nil
++       }
++       half := size >> 1
++       for left := int64(8); left >= half; left >>= 1 {
++               if size > left {
++                       for right := int64(1); right <= 8; right <<= 1 {
++                               if left+right >= size {
++                                       result := left
++                                       if returnRight {
++                                               result = right
++                                       }
++                                       switch result {
++                                       case 1:
++                                               return typ.UInt8
++                                       case 2:
++                                               return typ.UInt16
++                                       case 4:
++                                               return typ.UInt32
++                                       case 8:
++                                               return typ.UInt64
++                                       default:
++                                               panic("unexpected chunk")
++                                       }
++                               }
++                       }
++                       panic("expected to find right chunk")
++               }
++       }
++       return nil
++}
+
+// some common constant sized memeq not handled earlier
+(LoweredMemEq p q (MOVDconst [c]) mem) && chunk(c, false, typ) != nil =>
+    (Equal (CMPconst [0]
+           (OR <typ.UInt64> (XOR <typ.UInt64> (Load <chunk(c, false, typ)> p mem)
+                                              (Load <chunk(c, false, typ)> q mem))
+                            (XOR <typ.UInt64> (Load <chunk(c, true, typ)> (ADDconst <p.Type> [c - chunk(c, true, typ).Size()] p) mem)
+                                              (Load <chunk(c, true, typ)> (ADDconst <q.Type> [c - chunk(c, true, typ).Size()] q) mem)))))
+
+(LoweredMemEq p q (MOVDconst [17]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVBUload [16] p mem)
+                                                                                                   (MOVBUload [16] q mem)))))
+(LoweredMemEq p q (MOVDconst [18]) mem) => (AndB (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                 (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVHUload [16] p mem)
+                                                                                                   (MOVHUload [16] q mem)))))
+(LoweredMemEq p q (MOVDconst [c]) mem) && c >= 19 && c <= 20 => (AndB
+                                                                   (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                                   (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVWUload [int32(c - 4)] p mem)
+                                                                                                                     (MOVWUload [int32(c - 4)] q mem)))))
+(LoweredMemEq p q (MOVDconst [c]) mem) && c >= 21 && c <= 24 => (AndB
+                                                                   (LoweredMemEq p q (MOVDconst [16]) mem)
+                                                                   (Equal <typ.Bool> (CMPconst [0] (XOR <typ.UInt64> (MOVDload [int32(c - 8)]  p mem)
+                                                                                                                     (MOVDload [int32(c - 8)]  q mem)))))
+(LoweredMemEq p q (MOVDconst [c]) mem) && c >= 25 && c <= 32 => (AndB
+                                                                   (LoweredMemEq                       p                        q  (MOVDconst [16]) mem)
+                                                                   (LoweredMemEq (OffPtr <p.Type> [16] p) (OffPtr <q.Type> [16] q) (MOVDconst [c - 16]) mem))
+                                                                   
