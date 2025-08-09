@@ -28,3 +28,36 @@ arm64:
 -0.07%  (69351044       ->      69301412 bytes): ./cockroachdb/exp1/bin/cockroach-short
 -0.07%  (69351044       ->      69301412 bytes): ./cockroachdb/exp1/bin/cockroach
 -0.05%  (2745268        ->      2743892 bytes): ./cockroachdb/exp1/bin/cockroachdb-bench
+
+x86:
+-0.03%  (2987633        ->      2986641 bytes): ./cockroachdb/csea/bin/bazelisk
+-0.05%  (81227964       ->      81184444 bytes): ./cockroachdb/csea/bin/cockroach-short
+-0.03%  (3114001        ->      3112913 bytes): ./cockroachdb/csea/bin/cockroachdb-bench
+-0.05%  (81227964       ->      81184444 bytes): ./cockroachdb/csea/bin/cockroach
+-0.03%  (10297329       ->      10294097 bytes): ./etcd/csea/bin/etcd
+-0.02%  (6809457        ->      6807985 bytes): ./etcd/csea/bin/etcd-bench
+-0.02%  (7031185        ->      7029585 bytes): ./etcd/csea/bin/benchmark
+-0.04%  (1367153        ->      1366641 bytes): ./go-build/csea/bin/go-build-bench
+-0.03%  (17381585       ->      17376785 bytes): ./go-build/csea/bin/dummy
+0.00%   (44     ->      44 bytes): ./go-build/csea/bin/goroot/src/debug/dwarf/testdata/rnglistx.elf
+0.00%   (616    ->      616 bytes): ./go-build/csea/bin/goroot/src/debug/dwarf/testdata/issue57046-clang.elf5
+0.00%   (456    ->      456 bytes): ./go-build/csea/bin/goroot/src/debug/dwarf/testdata/typedef.elf
+0.00%   (450    ->      450 bytes): ./go-build/csea/bin/goroot/src/debug/dwarf/testdata/ranges.elf
+-0.05%  (2116913        ->      2115921 bytes): ./go-build/csea/bin/goroot/pkg/tool/linux_amd64/asm
+0.01%   (9789681        ->      9790353 bytes): ./go-build/csea/bin/goroot/pkg/tool/linux_amd64/compile
+-0.04%  (3257009        ->      3255665 bytes): ./go-build/csea/bin/goroot/pkg/tool/linux_amd64/vet
+-0.04%  (1944145        ->      1943409 bytes): ./go-build/csea/bin/goroot/pkg/tool/linux_amd64/cgo
+-0.09%  (2875825        ->      2873137 bytes): ./go-build/csea/bin/goroot/pkg/tool/linux_amd64/link
+-0.03%  (2056881        ->      2056273 bytes): ./go-build/csea/bin/goroot/pkg/tool/linux_amd64/cover
+-0.04%  (912401 ->      912049 bytes): ./go-build/csea/bin/goroot/pkg/tool/linux_amd64/preprofile
+-0.03%  (1270353        ->      1269969 bytes): ./go-build/csea/bin/goroot/bin/gofmt
+-0.02%  (6677905        ->      6676305 bytes): ./go-build/csea/bin/goroot/bin/go
+-0.05%  (4169169        ->      4166961 bytes): ./bleve-index/csea/bin/bleve-index-bench
+-0.03%  (3090065        ->      3089009 bytes): ./tile38/csea/bin/tile38-bench
+-0.03%  (11578577       ->      11575057 bytes): ./tile38/csea/bin/tile38-server
+-0.04%  (1341937        ->      1341425 bytes): ./esbuild/csea/bin/esbuild-bench
+-0.04%  (5612177        ->      5609841 bytes): ./esbuild/csea/bin/esbuild
+-0.03%  (3080209        ->      3079153 bytes): ./gvisor/csea/bin/gvisor-bench
+-0.04%  (12044305       ->      12039665 bytes): ./gvisor/csea/bin/runsc
+-0.05%  (1559121        ->      1558385 bytes): ./markdown/csea/bin/markdown-bench
+-0.03%  (1733745        ->      1733233 bytes): ./gopher-lua/csea/bin/gopher-lua-bench
