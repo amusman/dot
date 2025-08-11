@@ -1,3 +1,15 @@
+linux_arm64
+Executable            Old .text  New .text     Change
+-------------------------------------------------------
+asm                     1963124    1961972     -0.06%
+cgo                     1734228    1733140     -0.06%
+compile                 8948740    8948516     -0.00%
+cover                   1864500    1863588     -0.05%
+link                    2555700    2552676     -0.12%
+preprofile               863636     862980     -0.08%
+vet                     2869220    2867556     -0.06%
+
+
 @@ -512,6 +512,13 @@ func skipDisjointMemDefs(user *Value, idxUserPtr, idxUserMem int, useWidth int64
         var skips uint32
         for skips = 0; skips < maxSkips; skips++ {
