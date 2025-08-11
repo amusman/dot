@@ -1,3 +1,16 @@
+@@ -512,6 +512,13 @@ func skipDisjointMemDefs(user *Value, idxUserPtr, idxUserMem int, useWidth int64
+        var skips uint32
+        for skips = 0; skips < maxSkips; skips++ {
+                if idxPtr, idxMem, width, ok := isMemDef(mem); ok {
++                       if mem.Args[idxMem].Uses > 50 {
++                               // Going across a memory def with many uses may potentially increase register pressure.
++                               // Good examples in bent benchmarks for using this heuristic to avoid excessive spills:
++                               // > 200 uses: gtank_blake2s:Hash8K: func github.com/gtank/blake2s.(*Digest).compress
++                               // > 50  uses: ethereum_trie:BenchmarkHashFixedSize/10K: func golang.org/x/crypto/sha3.keccakF1600
++                               break
++                       }
+                        defPtr := mem.Args[idxPtr]
+
 arm64:
 -0.06%  (1472724        ->      1471828 bytes): ./markdown/exp1/bin/markdown-bench
 -0.05%  (10095428       ->      10090884 bytes): ./tile38/exp1/bin/tile38-server
