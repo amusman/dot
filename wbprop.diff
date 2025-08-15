@@ -1,0 +1,109 @@
+    wbprop
+
+diff --git a/src/cmd/compile/internal/ssa/writebarrier.go b/src/cmd/compile/internal/ssa/writebarrier.go
+index 9ef3667d51..08324bc8a8 100644
+--- a/src/cmd/compile/internal/ssa/writebarrier.go
++++ b/src/cmd/compile/internal/ssa/writebarrier.go
+@@ -177,6 +177,7 @@ func writebarrier(f *Func) {
+        var stores, after []*Value
+        var sset, sset2 *sparseSet
+        var storeNumber []int32
++       afterBlocks := make([]*Block, 0, 64) // holds new blocks split out from current block
+
+        // Compute map from a value to the SelectN [1] value that uses it.
+        select1 := f.Cache.allocValueSlice(f.NumValues())
+@@ -242,6 +243,7 @@ func writebarrier(f *Func) {
+                        defer f.Cache.freeInt32Slice(storeNumber)
+                }
+
++               afterBlocks = afterBlocks[:0]
+                // order values in store order
+                b.Values = storeOrder(b.Values, sset, storeNumber)
+        again:
+@@ -564,10 +566,31 @@ func writebarrier(f *Func) {
+                        w.Block = bEnd
+                }
+
++               afterBlocks = append(afterBlocks, bEnd)
++
+                // if we have more stores in this block, do this block again
+                if nWBops > 0 {
+                        goto again
+                }
++
++               // Walk the split-after instructions in the store order while
++               // we still remember they were in the same block.
++               for i := len(afterBlocks) - 1; i >= 0; i-- {
++                       for _, w := range afterBlocks[i].Values {
++                               if w.Pos.IsStmt() != src.PosDefaultStmt {
++                                       continue
++                               }
++                               // Propagate is_stmt mark, otherwise folding away arg will lose it.
++                               for _, arg := range w.Args {
++                                       if arg.Block == b && arg.Op == OpOffPtr &&
++                                               arg.Pos.IsStmt() == src.PosIsStmt &&
++                                               arg.Pos.Line() == w.Pos.Line() {
++                                               w.Pos = w.Pos.WithIsStmt()
++                                               arg.Pos = arg.Pos.WithNotStmt()
++                                       }
++                               }
++                       }
++               }
+        }
+ }
+
+diff --git a/src/cmd/compile/internal/ssa/writebarrier_test.go b/src/cmd/compile/internal/ssa/writebarrier_test.go
+index 0b11afc84d..ccdb400b2a 100644
+--- a/src/cmd/compile/internal/ssa/writebarrier_test.go
++++ b/src/cmd/compile/internal/ssa/writebarrier_test.go
+@@ -6,6 +6,7 @@ package ssa
+
+ import (
+        "cmd/compile/internal/types"
++       "cmd/internal/src"
+        "testing"
+ )
+
+@@ -54,3 +55,42 @@ func TestWriteBarrierPhi(t *testing.T) {
+        writebarrier(fun.f)
+        CheckFunc(fun.f)
+ }
++
++func TestWriteBarrierStatementBoundary(t *testing.T) {
++       c := testConfig(t)
++       ptrType := c.config.Types.BytePtr
++       int64Type := c.config.Types.Int64
++
++       fun := c.Fun("entry",
++               Bloc("entry",
++                       Valu("start", OpInitMem, types.TypeMem, 0, nil),
++                       Valu("sb", OpSB, c.config.Types.Uintptr, 0, nil),
++                       Valu("sp", OpSP, c.config.Types.Uintptr, 0, nil),
++                       Valu("v", OpConstNil, ptrType, 0, nil),
++                       Valu("addr1", OpAddr, ptrType, 0, nil, "sb"),
++                       Valu("addr2", OpOffPtr, int64Type.PtrTo(), 8, nil, "addr1"), // dwarf statement boundary - lost when folded into both users in the block after write barrier
++                       Valu("wb", OpStore, types.TypeMem, 0, ptrType, "addr1", "v", "start"),
++                       Valu("ld", OpLoad, int64Type, 0, nil, "addr2", "wb"),
++                       Valu("dbl", OpAdd64, int64Type, 0, nil, "ld", "ld"),
++                       Valu("st", OpStore, types.TypeMem, 0, int64Type, "addr2", "dbl", "wb"),
++                       Goto("exit")),
++               Bloc("exit",
++                       Exit("st")))
++
++       pos := src.MakePos(src.NewFileBase("file", ""), 1, 1)
++       xpos := fun.f.Config.ctxt.PosTable.XPos(pos)
++
++       fun.values["addr2"].Pos = xpos.WithIsStmt()
++       fun.values["ld"].Pos = xpos
++       fun.values["st"].Pos = xpos
++
++       CheckFunc(fun.f)
++       writebarrier(fun.f)
++       CheckFunc(fun.f)
++
++       if fun.values["addr2"].Pos.IsStmt() != src.PosNotStmt ||
++               fun.values["ld"].Pos.IsStmt() != src.PosIsStmt ||
++               fun.values["st"].Pos.IsStmt() != src.PosDefaultStmt {
++               fun.f.Fatalf("is_stmt mark was not propagated")
++       }
++}
