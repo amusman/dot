@@ -1,0 +1,57 @@
+    cmd/internal/obj/arm64: mark instructions with label
+
+diff --git a/src/cmd/internal/obj/arm64/obj7.go b/src/cmd/internal/obj/arm64/obj7.go
+index 2583e46354..3112662427 100644
+--- a/src/cmd/internal/obj/arm64/obj7.go
++++ b/src/cmd/internal/obj/arm64/obj7.go
+@@ -504,7 +504,7 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
+        for p := c.cursym.Func().Text; p != nil; p = p.Link {
+                switch p.As {
+                case obj.ATEXT:
+-                       p.Mark |= LEAF
++                       p.Mark |= LEAF | LABEL
+
+                case ABL:
+                        c.cursym.Func().Text.Mark &^= LEAF
+@@ -694,7 +694,14 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
+                        q1.To.Type = obj.TYPE_REG
+                        q1.To.Reg = REGFP
+
++               case AB, ABL:
++                       if p.Link != nil {
++                               p.Link.Mark |= LABEL
++                       }
+                case obj.ARET:
++                       if p.Link != nil {
++                               p.Link.Mark |= LABEL
++                       }
+                        nocache(p)
+                        if p.From.Type == obj.TYPE_CONST {
+                                c.ctxt.Diag("using BECOME (%v) is not supported!", p)
+@@ -906,7 +913,26 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
+                        p.From.Reg = int16(REG_LSL + r + (shift&7)<<5)
+                        p.From.Offset = 0
+                }
++               if p.To.Type == obj.TYPE_BRANCH && p.To.Val != nil {
++                       label := p.To.Val.(*obj.Prog)
++                       if label != nil {
++                               label.Mark |= LABEL
++                       }
++               }
++               if p.From.Type == obj.TYPE_BRANCH && p.From.Val != nil {
++                       label := p.From.Val.(*obj.Prog)
++                       if label != nil {
++                               label.Mark |= LABEL
++                       }
++               }
+        }
++
++       for _, jt := range cursym.Func().JumpTables {
++               for _, p := range jt.Targets {
++                       p.Mark |= LABEL
++               }
++       }
++
+ }
+
+ func nocache(p *obj.Prog) {
