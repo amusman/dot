@@ -1,0 +1,661 @@
+# ARM64 FMLA instruction (NEON 4-lane 32-bit floating-point Multiply-Add to accumulator)
+- go: MulAdd
+  goarch: arm64
+  asm: VFMLA
+  arrangement: "4S"
+  cpuFeature: NEON
+  commutative: true
+  inVariant: []
+  documentation: !string |-
+    // NAME multiplies n by m and adds the product to the accumulator
+  in:
+  - class: vreg
+    go: Float32x4
+    name: accumulator
+    base: float
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+  - class: vreg
+    go: Float32x4
+    name: n
+    base: float
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: vreg
+    go: Float32x4
+    name: m
+    base: float
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Float32x4
+    base: float
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 SUB instruction (NEON 4-lane 32-bit integer sub)
+- go: Sub
+  goarch: arm64
+  asm: VSUB
+  arrangement: "4S"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 ADDP instruction (NEON 4-lane 32-bit integer add pairwise)
+- go: PairwiseAdd
+  goarch: arm64
+  asm: VADDP
+  arrangement: "4S"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 AND instruction (NEON full width integer and)
+- go: And
+  goarch: arm64
+  asm: VAND
+  arrangement: "16B"
+  cpuFeature: NEON
+  commutative: true
+  inVariant: []
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 ORR instruction (NEON full width integer or)
+- go: Or
+  goarch: arm64
+  asm: VORR
+  arrangement: "16B"
+  cpuFeature: NEON
+  commutative: true
+  inVariant: []
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 EOR instruction (NEON full width integer eor)
+- go: Xor
+  goarch: arm64
+  asm: VEOR
+  arrangement: "16B"
+  cpuFeature: NEON
+  commutative: true
+  inVariant: []
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 GetElem instruction (NEON 4-lane 32-bit integer umov)
+- go: GetElem
+  goarch: arm64
+  asm: VMOV
+  arrangement: "Sextr"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  in:
+  - class: immediate
+    bits: 8
+    immOffset: 0
+    go: Immediate
+    asmPos: 1
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  out:
+  - class: greg
+    go: int32
+    base: int
+    bits: 32
+    asmPos: 0
+
+# ARM64 SetElem (NEON 4-lane 32-bit integer ins)
+- go: SetElem
+  goarch: arm64
+  asm: VMOV
+  arrangement: "Sins"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  in:
+  - class: immediate
+    bits: 8
+    immOffset: 0
+    go: Immediate
+    asmPos: 0
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+  - class: greg
+    go: int32
+    base: int
+    bits: 32
+    asmPos: 1
+  out:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 Broadcast128 (NEON 4-lane 32-bit integer dup)
+- go: Broadcast128
+  goarch: arm64
+  asm: VDUP
+  arrangement: "S"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  in:
+  - class: immediate
+    bits: 8
+    constImm: 0
+    const: 0
+    go: Immediate
+    asmPos: 1
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  out:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 CMEQ (NEON 4-lane 32-bit integer Compare bitwise Equal (vector))
+- go: Equal
+  goarch: arm64
+  asm: VCMEQ
+  arrangement: "4S"
+  cpuFeature: NEON
+  commutative: true
+  inVariant: []
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: vreg
+    base: int
+    go: Int32x4
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 2
+  out:
+  - class: vreg
+    base: int
+    overwriteBase: int
+    overwriteClass: mask
+    go: Int32x4
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 CMTST (NEON 4-lane 32-bit integer Compare bitwise Test bits nonzero (vector))
+- go: Test
+  goarch: arm64
+  asm: VCMTST
+  arrangement: "4S"
+  cpuFeature: NEON
+  commutative: true
+  inVariant: []
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: vreg
+    base: int
+    go: Int32x4
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 2
+  out:
+  - class: vreg
+    base: int
+    overwriteBase: int
+    overwriteClass: mask
+    go: Int32x4
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 USHR (NEON 4-lane 32-bit integer Unsigned Shift Right (immediate))
+- go: ShiftAllRight
+  goarch: arm64
+  asm: VUSHR
+  arrangement: "4S"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  specialLower: "noponzeroimm"
+  in:
+  - class: vreg
+    go: Uint32x4
+    base: uint
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: immediate
+    bits: 8
+    immOffset: 0
+    go: Immediate
+    asmPos: 2
+  out:
+  - class: vreg
+    base: uint
+    go: Uint32x4
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 SSHR (NEON 4-lane 32-bit integer Signed Shift Right (immediate))
+- go: ShiftAllRight
+  goarch: arm64
+  asm: VSSHR
+  arrangement: "4S"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  specialLower: "noponzeroimm"
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: immediate
+    bits: 8
+    immOffset: 0
+    go: Immediate
+    asmPos: 2
+  out:
+  - class: vreg
+    base: int
+    go: Int32x4
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 SHL (NEON 4-lane 32-bit integer Shift Left (immediate))
+- go: ShiftAllLeft
+  goarch: arm64
+  asm: VSHL
+  arrangement: "4S"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  in:
+  - class: vreg
+    go: Int32x4
+    base: int
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 1
+  - class: immediate
+    bits: 8
+    immOffset: 0
+    go: Immediate
+    asmPos: 2
+  out:
+  - class: vreg
+    base: int
+    go: Int32x4
+    elemBits: 32
+    bits: 128
+    lanes: 4
+    asmPos: 0
+
+# ARM64 TBL (NEON Table vector Lookup of 16 lanes (from single source))
+- go: Permute
+  goarch: arm64
+  asm: VTBL
+  arrangement: "16B"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  documentation: !string |-
+    // NAME performs a full permutation of source using indices:
+    // result := {source[indices[0]], source[indices[1]], ..., source[indices[n]]}
+    // the lanes with indices out of range are set to zero.
+  in:
+  - class: vreg
+    name: source
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    listNumber: 0
+    asmPos: 1
+  - class: vreg
+    name: indices
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 0
+
+# ARM64 TBX (NEON Table vector Lookup of 16 lanes (from single source))
+- go: PermuteX
+  goarch: arm64
+  asm: VTBX
+  arrangement: "16B"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  documentation: !string |-
+    // NAME performs a full permutation of source using indices:
+    // result := {source[indices[0]], source[indices[1]], ..., source[indices[n]]}
+    // the lanes with indices out of range have values from original.
+  in:
+  - class: vreg
+    name: original
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 0
+  - class: vreg
+    name: source
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    listNumber: 0
+    asmPos: 1
+  - class: vreg
+    name: indices
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 0
+
+# ARM64 BIT (NEON Bitwise Insert if True)
+- go: Blend
+  goarch: arm64
+  asm: VBIT
+  arrangement: "16B"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  documentation: !string |-
+    // NAME inserts each bit from newbits into result where corresponding bit of mask is 1,
+    // otherwise it leaves bit from original.
+    // The compiler is free to choose any of VBIT, VBIF or VBSL to do the work.
+  in:
+  - class: vreg
+    name: original
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 0
+  - class: vreg
+    name: newbits
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 1
+  - class: vreg
+    name: mask
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 2
+  out:
+  - class: vreg
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 0
+
+# ARM64 CNT instruction (NEON 16-lane Population Count per byte)
+- go: OnesCount
+  goarch: arm64
+  asm: VCNT
+  arrangement: "16B"
+  cpuFeature: NEON
+  commutative: true
+  inVariant: []
+  documentation: !string |-
+    // NAME counts bits set to 1 in each byte.
+  in:
+  - class: vreg
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 1
+  out:
+  - class: vreg
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 0
+
+# ARM64 EXT (NEON Extract vector from pair of vectors)
+- go: Extract
+  goarch: arm64
+  asm: VEXT
+  arrangement: "16B"
+  cpuFeature: NEON
+  commutative: false
+  inVariant: []
+  documentation: !string |-
+    // NAME extracts the lowest vector elements from the second argument and
+    // the highest vector elements from the first. The constant index value
+    // specifies the lowest vector element to extract from the first source,
+    // and consecutive elements are extracted from the first, then second
+    // until the result vector is filled.
+  in:
+  - class: vreg
+    name: first
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 1
+  - class: vreg
+    name: second
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 2
+  - class: immediate
+    bits: 8
+    immOffset: 0
+    go: Immediate
+    asmPos: 3
+  out:
+  - class: vreg
+    go: Uint8x16
+    base: uint
+    elemBits: 8
+    bits: 128
+    lanes: 16
+    asmPos: 0
