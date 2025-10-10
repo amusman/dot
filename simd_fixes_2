@@ -1,0 +1,496 @@
+diff --git a/src/cmd/compile/internal/arm64/ssa.go b/src/cmd/compile/internal/arm64/ssa.go
+index 14ec049f7d..80d0ac7816 100644
+--- a/src/cmd/compile/internal/arm64/ssa.go
++++ b/src/cmd/compile/internal/arm64/ssa.go
+@@ -1394,6 +1394,62 @@ func spillArgReg(pp *objw.Progs, p *obj.Prog, f *ssa.Func, t *types.Type, reg in
+        return p
+ }
+
++func allLanes(arrangement int16) int16 {
++       switch arrangement {
++       case arm64.ARNG_B:
++               return arm64.ARNG_16B
++       case arm64.ARNG_H:
++               return arm64.ARNG_8H
++       case arm64.ARNG_S:
++               return arm64.ARNG_4S
++       case arm64.ARNG_D:
++               return arm64.ARNG_2D
++       default:
++               return arrangement
++       }
++}
++
++// simdV11 generates a two-register SIMD instruction: op Vn, Vd
++// For example: VCNT V1.16B, V0.16B
++// The arrangement parameter specifies the vector element arrangement (e.g., 16B, 2D)
++func simdV11(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Type = obj.TYPE_REG
++       p.From.Reg, p.From.Class = simdReg(v.Args[0], arrangement)
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg, p.To.Class = simdReg(v, arrangement)
++       return p
++}
++// simdV11ImmIn1 generates a SIMD instruction with indexed input and
++// vector output: op Vn[imm], Vd
++// For example: VDUP V1.S[0], V0.4S
++// The arrangement parameter specifies the source arrangement (e.g., S, D),
++// and the destination arrangement is chosen to match all lanes (e.g. 4S for S).
++func simdV11ImmIn1(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Index = int16(v.AuxUInt8())
++       p.From.Type = obj.TYPE_REG
++       p.From.Reg, p.From.Class = simdReg(v.Args[0], arrangement)
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg, p.To.Class = simdReg(v, allLanes(arrangement))
++       return p
++}
++
++// simdV11Imm8 generates a SIMD instruction with one vector input and
++// immediate: op #imm, Vn, Vd
++// For example: VUSHR $1, V1.4S, V0.4S
++// The arrangement parameter specifies the vector element arrangement (e.g., 4S, 2D)
++func simdV11Imm8(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Offset = int64(v.AuxUInt8())
++       p.From.Type = obj.TYPE_CONST
++       p.Reg, _ = simdReg(v.Args[0], arrangement)
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg, p.To.Class = simdReg(v, arrangement)
++       return p
++}
++
+ // simdV21 generates a three-register SIMD instruction: op Vn, Vm, Vd
+ // For example: VADD V1.4S, V0.4S, V0.4S
+ // The arrangement parameter specifies the vector element arrangement (e.g., 4S, 2D)
+@@ -1407,29 +1463,150 @@ func simdV21(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
+        return p
+ }
+
+-// simdReg converts an SSA SIMD register to the appropriate ARM64 register
+-// with the specified arrangement (e.g., V0.4S for 32x4, V0.2D for 64x2).
+-// Returns the register and corresponding addressing class.
+-// Need to be consistent with ARM64RegisterExtension.
+-func simdReg(v *ssa.Value, arrangement int16) (int16, int8) {
+-       // Get the register number (0-31)
++// simdV21Imm8 generates a three-register SIMD instruction: op Vn, Vm, Vd
++// For example: VEXT V1.16B, V0.16B, V2.16B, #3
++// The arrangement parameter specifies the vector element arrangement (e.g., 16B, 8B)
++func simdV21Imm8(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Type = obj.TYPE_CONST
++       p.From.Offset = int64(v.AuxUInt8())
++
++       firstReg, _ := simdReg(v.Args[0], arrangement)
++       p.AddRestSourceReg(firstReg)
++
++       p.Reg, _ = simdReg(v.Args[1], arrangement)
++
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg, p.To.Class = simdReg(v, arrangement)
++       return p
++}
++
++// simdV21List generates a VTBL-like instruction: op Vm.Ta, [Vn.B16,...], Vd.Ta
++// For example: VTBL V15.B8, [V1.B16], V20.B8
++// The arrangement parameter specifies the indices arrangement (e.g., 16B, 8B)
++func simdV21List(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Type = obj.TYPE_REG
++       p.From.Reg, p.From.Class = simdReg(v.Args[1], arrangement)
++       // Actually VTBL may have up to 4 consecutive source regs, it needs regalloc support;
++       // for now allow only one register in the list.
++       regList := simdRegListOffset(v.Args[0], 1, arm64.ARNG_16B)
++       p.AddRestSource(obj.Addr{Type: obj.TYPE_REGLIST, Offset: regList})
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg, p.To.Class = simdReg(v, arrangement)
++       return p
++}
++
++// simdV31ResultInArg0 generates a three-register SIMD instruction: op Vn, Vm, Vd
++// For example: VBIT V1.16B, V0.16B, V2.16B
++// The arrangement parameter specifies the vector element arrangement (e.g., 16B, 2D)
++func simdV31ResultInArg0(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Type = obj.TYPE_REG
++       p.From.Reg, p.From.Class = simdReg(v.Args[2], arrangement)
++       p.Reg, _ = simdReg(v.Args[1], arrangement)
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg, p.To.Class = simdReg(v, arrangement)
++       return p
++}
++
++// simdV31ResultInArg0List generates a VTBX-like instruction: op Vm.Ta, [Vn.B16,...], Vd.Ta
++// For example: VTBX V15.B8, [V1.B16], V20.B8
++// The arrangement parameter specifies the indices arrangement (e.g., 16B, 8B)
++func simdV31ResultInArg0List(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Type = obj.TYPE_REG
++       p.From.Reg, p.From.Class = simdReg(v.Args[2], arrangement)
++       // Actually VTBX may have up to 4 consecutive source regs, it needs regalloc support;
++       // for now allow only one register in the list.
++       regList := simdRegListOffset(v.Args[1], 1, arm64.ARNG_16B)
++       p.AddRestSource(obj.Addr{Type: obj.TYPE_REGLIST, Offset: regList})
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg, p.To.Class = simdReg(v, arrangement)
++       return p
++}
++
++// simdVgpImmIn1 generates a SIMD instruction with indexed input and
++// gp output: op Vn[imm], Xd
++// For example: VMOV V1.4S[2], R0
++// The arrangement parameter specifies the vector element arrangement (e.g., S, D)
++func simdVgpImmIn1(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Index = int16(v.AuxUInt8())
++       p.From.Type = obj.TYPE_REG
++       p.From.Reg, p.From.Class = simdReg(v.Args[0], arrangement)
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg = v.Reg()
++       return p
++}
++
++// simdVgpvResultInArg0ImmOutIn0 generates a SIMD instruction with
++// indexed InOut: op Xn, Vd[imm]
++// For example: VMOV R0, V1.4S[2] (INS general instruction)
++// The arrangement parameter specifies the vector element arrangement (e.g., S, D)
++func simdVgpvResultInArg0ImmOutIn0(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.To.Index = int16(v.AuxUInt8())
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg, p.To.Class = simdReg(v.Args[0], arrangement)
++       p.From.Reg = v.Args[1].Reg()
++       p.From.Type = obj.TYPE_REG
++       return p
++}
++
++// Get the register number (0-31) from ssa Value
++func simdRegNum(v *ssa.Value) int16 {
+        reg := v.Reg()
+        var regNum int16
+        switch {
+        case arm64.REG_F0 <= reg && reg <= arm64.REG_F31:
+                // SSA uses F registers for SIMD - convert to V register number
+                regNum = reg - arm64.REG_F0
+-       case arm64.REG_V0 <= reg && reg <= arm64.REG_V31:
+-               // Currently SSA uses F registers for SIMD values, detect if this assumption changes
+-               panic("simdReg: got V register from SSA - this path needs investigation")
+-               regNum = reg - arm64.REG_V0
+        default:
+                // Unexpected register type
+                base.Fatalf("simdReg: unexpected register %v for SIMD value", reg)
+        }
++       return regNum
++}
+
+-       // Return V register with arrangement for SIMD arithmetic operations
+-       // REG_ARNG is the base for registers with arrangement
+-       // The arrangement goes in bits [8:5], register number in bits [4:0]
+-       return arm64.REG_ARNG | (arrangement << 5) | regNum, arm64.C_ARNG
++// simdReg converts an SSA SIMD register to the appropriate ARM64 register
++// with the specified arrangement (e.g., V0.4S for 32x4, V0.2D for 64x2).
++// Returns the register and corresponding addressing class.
++// Need to be consistent with ARM64RegisterExtension.
++
++func simdReg(v *ssa.Value, arrangement int16) (int16, int8) {
++       regNum := simdRegNum(v)
++       switch arrangement {
++       case arm64.ARNG_B, arm64.ARNG_H, arm64.ARNG_S, arm64.ARNG_D:
++               // REG_ELEM is the base for accessing a register lane
++               // The arrangement goes in bits [8:5], register number in bits [4:0]
++               return arm64.REG_ELEM | (arrangement << 5) | regNum, arm64.C_ELEM
++       case arm64.ARNG_16B, arm64.ARNG_8H, arm64.ARNG_4S, arm64.ARNG_2D:
++               // REG_ARNG is the base for registers with arrangement
++               // The arrangement goes in bits [8:5], register number in bits [4:0]
++               return arm64.REG_ARNG | (arrangement << 5) | regNum, arm64.C_ARNG
++       default:
++               base.Fatalf("simdReg: unexpected arrangement %v for SIMD value %v", arrangement, v)
++               return 0, 0
++       }
++}
++
++// simdRegListOffset converts a sequence of regCnt registers starting from
++// the v's SSA register into appropriate ARM64 register list.
++// Need to be consistent with ARM64RegisterListOffset.
++func simdRegListOffset(v *ssa.Value, regCnt, arrangement int16) int64 {
++       regNum := simdRegNum(v) + arm64.REG_V0
++       offset := int64(regNum)
++       switch regCnt {
++       case 1:
++               offset |= 0x7 << 12
++       case 2:
++               offset |= 0xa << 12
++       case 3:
++               offset |= 0x6 << 12
++       case 4:
++               offset |= 0x2 << 12
++       }
++       offset |= int64(arrangement << 5)
++       offset |= 1 << 60
++       return offset
+ }
+diff --git a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+index b798628d0d..403ed469b0 100644
+--- a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+@@ -164,6 +164,7 @@ func init() {
+                fp11           = regInfo{inputs: []regMask{fp}, outputs: []regMask{fp}}
+                fpgp           = regInfo{inputs: []regMask{fp}, outputs: []regMask{gp}}
+                gpfp           = regInfo{inputs: []regMask{gp}, outputs: []regMask{fp}}
++               fpgpfp         = regInfo{inputs: []regMask{fp, gp}, outputs: []regMask{fp}}
+                fp21           = regInfo{inputs: []regMask{fp, fp}, outputs: []regMask{fp}}
+                fp31           = regInfo{inputs: []regMask{fp, fp, fp}, outputs: []regMask{fp}}
+                fp2flags       = regInfo{inputs: []regMask{fp, fp}}
+@@ -793,7 +794,7 @@ func init() {
+                pkg:                "cmd/internal/obj/arm64",
+                genfile:            "../../arm64/ssa.go",
+                genSIMDfile:        "../../arm64/simdssa.go",
+-               ops:                append(ops, simdARM64Ops(fp11, fp21)...),
++               ops:                append(ops, simdARM64Ops(fp11, fp21, fp31, fpgpfp, fpgp)...),
+                blocks:             blocks,
+                regnames:           regNamesARM64,
+                ParamIntRegNames:   "R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15",
+diff --git a/src/cmd/compile/internal/ssa/_gen/simdARM64ops.go b/src/cmd/compile/internal/ssa/_gen/simdARM64ops.go
+index b99a1ef790..2237b8b86d 100644
+--- a/src/cmd/compile/internal/ssa/_gen/simdARM64ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/simdARM64ops.go
+@@ -2,7 +2,7 @@
+
+ package main
+
+-func simdARM64Ops(v11, v21 regInfo) []opData {
++func simdARM64Ops(v11, v21, v31, vgpv, vgp regInfo) []opData {
+        return []opData{
+                {name: "VADD2D", argLength: 2, reg: v21, asm: "VADD", commutative: true, typ: "Vec128", resultInArg0: false},
+                {name: "VADD4S", argLength: 2, reg: v21, asm: "VADD", commutative: true, typ: "Vec128", resultInArg0: false},
+diff --git a/src/simd/_gen/simdgen/gen_simdGenericOps.go b/src/simd/_gen/simdgen/gen_simdGenericOps.go
+index 3dbbeb09f7..f8b14fcb52 100644
+--- a/src/simd/_gen/simdgen/gen_simdGenericOps.go
++++ b/src/simd/_gen/simdgen/gen_simdGenericOps.go
+@@ -46,7 +46,7 @@ func writeSIMDGenericOps(ops []Operation) *bytes.Buffer {
+                if op.NoGenericOps != nil && *op.NoGenericOps == "true" {
+                        continue
+                }
+-               _, _, _, immType, gOp := op.shape()
++               _, _, _, immType, gOp, _ := op.shape()
+                gOpData := genericOpsData{gOp.GenericName(), len(gOp.In), op.Commutative}
+                if immType == VarImm || immType == ConstVarImm {
+                        opsData.OpsImm = append(opsData.OpsImm, gOpData)
+diff --git a/src/simd/_gen/simdgen/gen_simdMachineOps.go b/src/simd/_gen/simdgen/gen_simdMachineOps.go
+index 1f7492e6b2..4933392b79 100644
+--- a/src/simd/_gen/simdgen/gen_simdMachineOps.go
++++ b/src/simd/_gen/simdgen/gen_simdMachineOps.go
+@@ -14,7 +14,7 @@ import (
+ const simdMachineOpsTmpl = `
+ package main
+
+-func simd{{.ArchUpper}}Ops({{if eq .ArchUpper "ARM64"}}v11, v21 regInfo{{else}}v11, v21, v2k, vkv, v2kv, v2kk, v31, v3kv, vgpv, vgp, vfpv, vfpkv, w11, w21, w2k, wkw, w2kw, w2kk, w31, w3kw, wgpw, wgp, wfpw, wfpkw regInfo{{end}}) []opData {
++func simd{{.ArchUpper}}Ops({{if eq .ArchUpper "ARM64"}}v11, v21, v31, vgpv, vgp regInfo{{else}}v11, v21, v2k, vkv, v2kv, v2kk, v31, v3kv, vgpv, vgp, vfpv, vfpkv, w11, w21, w2k, wkw, w2kw, w2kk, w31, w3kw, wgpw, wgp, wfpw, wfpkw regInfo{{end}}) []opData {
+        return []opData{
+ {{- range .OpsData }}
+                {name: "{{.OpName}}", argLength: {{.OpInLen}}, reg: {{.RegInfo}}, asm: "{{.Asm}}", commutative: {{.Comm}}, typ: "{{.Type}}", resultInArg0: {{.ResultInArg0}}},
+@@ -54,7 +54,7 @@ func writeSIMDMachineOps(ops []Operation) *bytes.Buffer {
+        opsData := make([]opData, 0)
+        opsDataImm := make([]opData, 0)
+        for _, op := range ops {
+-               shapeIn, shapeOut, maskType, _, gOp := op.shape()
++               shapeIn, shapeOut, maskType, _, gOp, _ := op.shape()
+                asm := machineOpName(maskType, gOp)
+
+                // TODO: all our masked operations are now zeroing, we need to generate machine ops with merging masks, maybe copy
+diff --git a/src/simd/_gen/simdgen/gen_simdrules.go b/src/simd/_gen/simdgen/gen_simdrules.go
+index 43a2422d9c..28018066a8 100644
+--- a/src/simd/_gen/simdgen/gen_simdrules.go
++++ b/src/simd/_gen/simdgen/gen_simdrules.go
+@@ -88,7 +88,7 @@ func writeSIMDRules(ops []Operation) *bytes.Buffer {
+                if opr.NoGenericOps != nil && *opr.NoGenericOps == "true" {
+                        continue
+                }
+-               opInShape, opOutShape, maskType, immType, gOp := opr.shape()
++               opInShape, opOutShape, maskType, immType, gOp, _ := opr.shape()
+                asm := machineOpName(maskType, gOp)
+                vregInCnt := len(gOp.In)
+                if maskType == OneMask {
+@@ -139,7 +139,7 @@ func writeSIMDRules(ops []Operation) *bytes.Buffer {
+                        case OneImmIn:
+                                tplName = "pureVreg"
+                                data.GoType = goType(gOp)
+-                       case PureVregIn:
++                       case PureVregIn, VlistIn:
+                                tplName = "pureVreg"
+                                data.GoType = goType(gOp)
+                        case OneKmaskImmIn:
+diff --git a/src/simd/_gen/simdgen/gen_simdssa.go b/src/simd/_gen/simdgen/gen_simdssa.go
+index c65aed7e38..66f4d795f7 100644
+--- a/src/simd/_gen/simdgen/gen_simdssa.go
++++ b/src/simd/_gen/simdgen/gen_simdssa.go
+@@ -104,16 +104,21 @@ func writeSIMDSSA(ops []Operation) *bytes.Buffer {
+                "v31",
+                "v3kv",
+                "v11Imm8",
++               "v11ImmIn1",
+                "vkvImm8",
+                "v21Imm8",
++               "v21List",
+                "v2kImm8",
+                "v2kkImm8",
+                "v31ResultInArg0",
++               "v31ResultInArg0List",
+                "v3kvResultInArg0",
+                "vfpv",
+                "vfpkv",
+                "vgpvImm8",
++               "vgpvResultInArg0ImmOutIn0",
+                "vgpImm8",
++               "vgpImmIn1",
+                "v2kvImm8",
+        }
+        regInfoSet := map[string][]string{}
+@@ -125,7 +130,7 @@ func writeSIMDSSA(ops []Operation) *bytes.Buffer {
+        allUnseen := make(map[string][]Operation)
+        archInfo := CurrentArch()
+        for _, op := range ops {
+-               shapeIn, shapeOut, maskType, _, gOp := op.shape()
++               shapeIn, shapeOut, maskType, _, gOp, immOpArg := op.shape()
+                asm := machineOpName(maskType, gOp)
+
+                if _, ok := seen[asm]; ok {
+@@ -146,7 +151,14 @@ func writeSIMDSSA(ops []Operation) *bytes.Buffer {
+                        regShape += "ResultInArg0"
+                }
+                if shapeIn == OneImmIn || shapeIn == OneKmaskImmIn {
+-                       regShape += "Imm8"
++                       if immOpArg != "" {
++                               regShape += "Imm"
++                               regShape += immOpArg
++                       } else {
++                               regShape += "Imm8"
++                       }
++               } else if shapeIn == VlistIn {
++                       regShape += "List"
+                }
+                idx, err := checkVecAsScalar(op)
+                if err != nil {
+diff --git a/src/simd/_gen/simdgen/gen_utility.go b/src/simd/_gen/simdgen/gen_utility.go
+index 20ce3c1351..1e5f163c79 100644
+--- a/src/simd/_gen/simdgen/gen_utility.go
++++ b/src/simd/_gen/simdgen/gen_utility.go
+@@ -87,6 +87,7 @@ const (
+        OneImmIn              // vector and immediate input
+        OneKmaskImmIn         // vector, kmask, and immediate inputs
+        PureKmaskIn           // only mask inputs.
++       VlistIn               // vector list (e.g. TBL [v1 v2 v3] vidx)
+ )
+
+ const (
+@@ -120,7 +121,7 @@ const (
+ //
+ // This function does not modify op.
+ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskShape, immType immShape,
+-       opNoImm Operation) {
++       opNoImm Operation, immOpIdx string) {
+        if len(op.Out) > 1 {
+                panic(fmt.Errorf("simdgen only supports 1 output: %s", op))
+        }
+@@ -143,13 +144,15 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+                panic(fmt.Errorf("simdgen only supports 1 output: %s", op))
+        }
+        hasImm := false
++       hasListIn := false
++       immAsmPos := -1
+        maskCount := 0
+        hasVreg := false
+        for _, in := range op.In {
+                if in.AsmPos == outputReg {
+                        if shapeOut != OneVregOutAtIn && in.AsmPos == 0 && in.Class == "vreg" {
+                                shapeOut = OneVregOutAtIn
+-                       } else {
++                       } else if in.Class != "immediate" { // allow using immediate as op index (immOpIdx), e.g. "3" in "VDUP V1.S[3], V0.4S" (arm64 neon).
+                                panic(fmt.Errorf("simdgen only support output and input sharing the same position case of \"the first input is vreg and the only output\": %s", op))
+                        }
+                }
+@@ -160,9 +163,19 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+                                panic(fmt.Errorf("simdgen only supports immediates of 8 bits: %s", op))
+                        }
+                        hasImm = true
++                       immAsmPos = in.AsmPos
++                       if immAsmPos == outputReg {
++                               immOpIdx += "Out"
++                       }
+                } else if in.Class == "mask" {
+                        maskCount++
+                } else {
++                       if immAsmPos == in.AsmPos {
++                               immOpIdx += fmt.Sprintf("In%d", in.AsmPos)
++                       }
++                       if in.ListNumber != nil {
++                               hasListIn = true
++                       }
+                        hasVreg = true
+                }
+        }
+@@ -202,7 +215,11 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+                return false
+        }
+        if !hasImm && maskCount == 0 {
+-               shapeIn = PureVregIn
++               if hasListIn {
++                       shapeIn = VlistIn
++               } else {
++                       shapeIn = PureVregIn
++               }
+        } else if !hasImm && maskCount > 0 {
+                if maskCount == 1 {
+                        shapeIn = OneKmaskIn
+@@ -228,7 +245,7 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+
+ // regShape returns a string representation of the register shape.
+ func (op *Operation) regShape() (string, error) {
+-       _, _, _, _, gOp := op.shape()
++       _, _, _, _, gOp, _ := op.shape()
+        var regInfo string
+        var vRegInCnt, gRegInCnt, kMaskInCnt, vRegOutCnt, gRegOutCnt, kMaskOutCnt int
+        for _, in := range gOp.In {
+@@ -440,7 +457,7 @@ var classes []string = []string{"BAD0", "op1", "op2", "op3", "op4"}
+ // The classification string is used to select a template or a clause of a template
+ // for intrinsics declaration and the ssagen intrinisics glue code in the compiler.
+ func classifyOp(op Operation) (string, Operation, error) {
+-       _, _, _, immType, gOp := op.shape()
++       _, _, _, immType, gOp, _ := op.shape()
+
+        var class string
+
+@@ -536,7 +553,7 @@ func (op Operation) GenericName() string {
+ func dedupGodef(ops []Operation) ([]Operation, error) {
+        seen := map[string][]Operation{}
+        for _, op := range ops {
+-               _, _, _, _, gOp := op.shape()
++               _, _, _, _, gOp, _ := op.shape()
+
+                gN := gOp.GenericName()
+                seen[gN] = append(seen[gN], op)
+@@ -582,7 +599,7 @@ func copyConstImm(ops []Operation) error {
+                if op.ConstImm == nil {
+                        continue
+                }
+-               _, _, _, immType, _ := op.shape()
++               _, _, _, immType, _, _ := op.shape()
+
+                if immType == ConstImm || immType == ConstVarImm {
+                        op.In[0].Const = op.ConstImm
+diff --git a/src/simd/_gen/simdgen/godefs.go b/src/simd/_gen/simdgen/godefs.go
+index d9d83362cf..4a9884612f 100644
+--- a/src/simd/_gen/simdgen/godefs.go
++++ b/src/simd/_gen/simdgen/godefs.go
+@@ -251,6 +251,10 @@ type Operand struct {
+        // because Intel's XED data is inconsistent. e.g. AVX512 VPMADDUBSW marks its operand
+        // elemBits 16, which should be 8.
+        OverwriteElementBits *int
++       // If non-nil, specify the number of the operand in the register list where they should
++       // get consecutive registers from register allocator. E.g., for TBL [v1 v2 v3] vidx
++       // we can set v1's ListNumber to 0, v2's to 1 and v3's to 2.
++       ListNumber *int
+ }
+
+ // isDigit returns true if the byte is an ASCII digit.
