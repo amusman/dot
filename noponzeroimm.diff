@@ -1,0 +1,39 @@
+    simd: add noponzeroimm peephole opt
+
+    Optimize away an instruction which is nop on zero immediate.
+    This appears necessary for arm64 neon VUSHR instructio because
+    that instruction cannot encode zero immediate, but may be generally
+    useful for many instructions.
+
+diff --git a/src/simd/_gen/simdgen/gen_simdrules.go b/src/simd/_gen/simdgen/gen_simdrules.go
+index b0fc7e62cd..43a2422d9c 100644
+--- a/src/simd/_gen/simdgen/gen_simdrules.go
++++ b/src/simd/_gen/simdgen/gen_simdrules.go
+@@ -36,6 +36,8 @@ var (
+ {{end}}
+ {{define "masksftimm"}}({{.Asm}} x (MOVQconst [c]) mask) => ({{.Asm}}const [uint8(c)] x mask)
+ {{end}}
++{{define "noponzeroimm"}}({{.Asm}} [0] x) => x
++{{end}}
+ `))
+ )
+
+@@ -47,6 +49,7 @@ var tmplOrder = map[string]int{
+        "maskOut":       3,
+        "maskIn":        4,
+        "pureVreg":      5,
++       "noponzeroimm":  6,
+ }
+
+ func compareTplRuleData(x, y tplRuleData) int {
+@@ -186,6 +189,10 @@ func writeSIMDRules(ops []Operation) *bytes.Buffer {
+                                        }
+                                        allData = append(allData, sftImmData)
+                                }
++                       } else if *gOp.SpecialLower == "noponzeroimm" {
++                               optData := data
++                               optData.tplName = "noponzeroimm"
++                               allData = append(allData, optData)
+                        } else {
+                                panic("simdgen sees unknwon special lower " + *gOp.SpecialLower + ", maybe implement it?")
+                        }
