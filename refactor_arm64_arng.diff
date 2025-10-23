@@ -1,0 +1,281 @@
+    cmd/internal/obj, cmd/compile, cmd/asm: refactor arm64 encoding helpers
+
+    Refactor arm64 functions used for encoding register lists and register
+    arrangement to avoid duplicating their logic in cmd/compile and cmd/asm.
+
+diff --git a/src/cmd/asm/internal/asm/parse.go b/src/cmd/asm/internal/asm/parse.go
+index 1cfc26a4b5..c1330b7979 100644
+--- a/src/cmd/asm/internal/asm/parse.go
++++ b/src/cmd/asm/internal/asm/parse.go
+@@ -775,7 +775,7 @@ func (p *Parser) registerExtension(a *obj.Addr, name string, prefix rune) {
+
+        switch p.arch.Family {
+        case sys.ARM64:
+-               err := arm64.ARM64RegisterExtension(a, ext, reg, num, isAmount, isIndex)
++               err := arm64.RegisterExtension(a, ext, reg, num, isAmount, isIndex)
+                if err != nil {
+                        p.errorf("%v", err)
+                }
+@@ -1174,7 +1174,7 @@ ListLoop:
+        case sys.ARM:
+                a.Offset = int64(bits)
+        case sys.ARM64:
+-               offset, err := arm64.ARM64RegisterListOffset(firstReg, regCnt, arrangement)
++               offset, err := arm64.RegisterListOffset(firstReg, regCnt, arrangement)
+                if err != nil {
+                        p.errorf("%v", err)
+                }
+diff --git a/src/cmd/compile/internal/arm64/ssa.go b/src/cmd/compile/internal/arm64/ssa.go
+index 43ecb6b4b7..a22a5a43dd 100644
+--- a/src/cmd/compile/internal/arm64/ssa.go
++++ b/src/cmd/compile/internal/arm64/ssa.go
+@@ -162,6 +162,38 @@ func genIndexedOperand(op ssa.Op, base, idx int16) obj.Addr {
+        return mop
+ }
+
++// simdRegArng encodes ssa value's register with specified simd arrangement
++func simdRegArng(reg int16, arng int16) int16 {
++       if reg < arm64.REG_F0 || arm64.REG_F31 < reg {
++               base.Fatalf("expected fp register: r%d", reg)
++       }
++       var err error
++       if reg, err = arm64.RegisterArrangement(reg, arng, false); err != nil {
++               base.Fatalf("bad simd register arrangement: %v", err)
++       }
++       return reg
++}
++
++// simdV11 generates element-wise unary vector operations, e.g. VCNT V1.B8, V0.B8
++func simdV11(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Type = obj.TYPE_REG
++       p.From.Reg = simdRegArng(v.Args[0].Reg(), arrangement)
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg = simdRegArng(v.Reg(), arm64.ARNG_8B)
++       return p
++}
++
++// simdV11Scalar generates vector-to-scalar reduction operations, e.g. VUADDLV V1.B8, V0
++func simdV11Scalar(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++       p := s.Prog(v.Op.Asm())
++       p.From.Type = obj.TYPE_REG
++       p.From.Reg = simdRegArng(v.Args[0].Reg(), arrangement)
++       p.To.Type = obj.TYPE_REG
++       p.To.Reg = v.Reg() - arm64.REG_F0 + arm64.REG_V0
++       return p
++}
++
+ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+        switch v.Op {
+        case ssa.OpCopy, ssa.OpARM64MOVDreg:
+@@ -1010,17 +1042,9 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+        case ssa.OpARM64LoweredRound32F, ssa.OpARM64LoweredRound64F:
+                // input is already rounded
+        case ssa.OpARM64VCNT:
+-               p := s.Prog(v.Op.Asm())
+-               p.From.Type = obj.TYPE_REG
+-               p.From.Reg = (v.Args[0].Reg()-arm64.REG_F0)&31 + arm64.REG_ARNG + ((arm64.ARNG_8B & 15) << 5)
+-               p.To.Type = obj.TYPE_REG
+-               p.To.Reg = (v.Reg()-arm64.REG_F0)&31 + arm64.REG_ARNG + ((arm64.ARNG_8B & 15) << 5)
++               simdV11(s, v, arm64.ARNG_8B)
+        case ssa.OpARM64VUADDLV:
+-               p := s.Prog(v.Op.Asm())
+-               p.From.Type = obj.TYPE_REG
+-               p.From.Reg = (v.Args[0].Reg()-arm64.REG_F0)&31 + arm64.REG_ARNG + ((arm64.ARNG_8B & 15) << 5)
+-               p.To.Type = obj.TYPE_REG
+-               p.To.Reg = v.Reg() - arm64.REG_F0 + arm64.REG_V0
++               simdV11Scalar(s, v, arm64.ARNG_8B)
+        case ssa.OpARM64CSEL, ssa.OpARM64CSEL0:
+                r1 := int16(arm64.REGZERO)
+                if v.Op != ssa.OpARM64CSEL0 {
+diff --git a/src/cmd/internal/obj/arm64/asm7.go b/src/cmd/internal/obj/arm64/asm7.go
+index 7602917ad5..6683706487 100644
+--- a/src/cmd/internal/obj/arm64/asm7.go
++++ b/src/cmd/internal/obj/arm64/asm7.go
+@@ -5060,7 +5060,7 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
+                        }
+                }
+                o1 |= uint32(p.To.Offset)
+-               // ARM64RegisterListOffset
++               // RegisterListOffset
+                // add opcode(bit 12-15) for vld1, mask it off if it's not vld1
+                o1 = c.maskOpvldvst(p, o1)
+
+@@ -5169,7 +5169,7 @@ func (c *ctxt7) asmout(p *obj.Prog, out []uint32) (count int) {
+                        }
+                }
+                o1 |= uint32(p.From.Offset)
+-               // ARM64RegisterListOffset
++               // RegisterListOffset
+                // add opcode(bit 12-15) for vst1, mask it off if it's not vst1
+                o1 = c.maskOpvldvst(p, o1)
+                o1 |= uint32(r&31) << 5
+@@ -7857,8 +7857,8 @@ func pack(q uint32, arngA, arngB uint8) uint32 {
+        return q<<16 | uint32(arngA)<<8 | uint32(arngB)
+ }
+
+-// ARM64RegisterExtension constructs an ARM64 register with extension or arrangement.
+-func ARM64RegisterExtension(a *obj.Addr, ext string, reg, num int16, isAmount, isIndex bool) error {
++// RegisterExtension constructs an ARM64 register with extension or arrangement.
++func RegisterExtension(a *obj.Addr, ext string, reg, num int16, isAmount, isIndex bool) error {
+        Rnum := (reg & 31) + num<<5
+        if isAmount {
+                if num < 0 || num > 7 {
+@@ -7921,87 +7921,84 @@ func ARM64RegisterExtension(a *obj.Addr, ext string, reg, num int16, isAmount, i
+
+                }
+        } else if reg <= REG_V31 && reg >= REG_V0 {
+-               switch ext {
+-               case "B8":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_8B & 15) << 5)
+-               case "B16":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_16B & 15) << 5)
+-               case "H4":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_4H & 15) << 5)
+-               case "H8":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_8H & 15) << 5)
+-               case "S2":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_2S & 15) << 5)
+-               case "S4":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_4S & 15) << 5)
+-               case "D1":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_1D & 15) << 5)
+-               case "D2":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_2D & 15) << 5)
+-               case "Q1":
+-                       if isIndex {
+-                               return errors.New("invalid register extension")
+-                       }
+-                       a.Reg = REG_ARNG + (reg & 31) + ((ARNG_1Q & 15) << 5)
+-               case "B":
+-                       if !isIndex {
+-                               return nil
+-                       }
+-                       a.Reg = REG_ELEM + (reg & 31) + ((ARNG_B & 15) << 5)
+-                       a.Index = num
+-               case "H":
+-                       if !isIndex {
+-                               return nil
+-                       }
+-                       a.Reg = REG_ELEM + (reg & 31) + ((ARNG_H & 15) << 5)
+-                       a.Index = num
+-               case "S":
+-                       if !isIndex {
+-                               return nil
+-                       }
+-                       a.Reg = REG_ELEM + (reg & 31) + ((ARNG_S & 15) << 5)
+-                       a.Index = num
+-               case "D":
+-                       if !isIndex {
+-                               return nil
+-                       }
+-                       a.Reg = REG_ELEM + (reg & 31) + ((ARNG_D & 15) << 5)
+-                       a.Index = num
+-               default:
++               arng, elem := readArrangement(ext)
++               if arng == -1 {
+                        return errors.New("unsupported simd register extension type: " + ext)
+                }
++               if elem && !isIndex {
++                       return nil
++               }
++               var err error
++               if reg, err = RegisterArrangement(reg, arng, isIndex); err != nil {
++                       return err
++               }
++               a.Reg = reg
++               if isIndex {
++                       a.Index = num
++               }
+        } else {
+                return errors.New("invalid register and extension combination")
+        }
+        return nil
+ }
+
+-// ARM64RegisterListOffset generates offset encoding according to AArch64 specification.
+-func ARM64RegisterListOffset(firstReg, regCnt int, arrangement int64) (int64, error) {
++// readArrangement returns arrangement constant (or -1 for unknown arrangement)
++// and a boolean flag specifying whether it refers to a vector element.
++func readArrangement(name string) (arng int16, elem bool) {
++       switch name {
++       case "B8":
++               return ARNG_8B, false
++       case "B16":
++               return ARNG_16B, false
++       case "H4":
++               return ARNG_4H, false
++       case "H8":
++               return ARNG_8H, false
++       case "S2":
++               return ARNG_2S, false
++       case "S4":
++               return ARNG_4S, false
++       case "D1":
++               return ARNG_1D, false
++       case "D2":
++               return ARNG_2D, false
++       case "B":
++               return ARNG_B, true
++       case "H":
++               return ARNG_H, true
++       case "S":
++               return ARNG_S, true
++       case "D":
++               return ARNG_D, true
++       case "Q1":
++               return ARNG_1Q, false
++       default:
++               return -1, false
++       }
++}
++
++// RegisterArrangement encodes specified simd register number and arrangement.
++func RegisterArrangement(reg int16, arng int16, isIndex bool) (int16, error) {
++       arng &= 15
++       arrangement := arng << 5
++       switch arng {
++       case ARNG_B, ARNG_H, ARNG_S, ARNG_D:
++               if !isIndex {
++                       return reg, nil
++               }
++               return REG_ELEM + (reg & 31) + arrangement, nil
++       case ARNG_16B, ARNG_8H, ARNG_4S, ARNG_2D,
++               ARNG_8B, ARNG_4H, ARNG_2S, ARNG_1D, ARNG_1Q:
++               if isIndex {
++                       return 0, errors.New("invalid register extension")
++               }
++               return REG_ARNG + (reg & 31) + arrangement, nil
++       }
++       return 0, errors.New("unsupported simd register arrangement: " + fmt.Sprint(arng))
++}
++
++// RegisterListOffset generates offset encoding according to AArch64 specification.
++func RegisterListOffset(firstReg, regCnt int, arrangement int64) (int64, error) {
+        offset := int64(firstReg)
+        switch regCnt {
+        case 1:
