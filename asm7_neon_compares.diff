@@ -1,0 +1,264 @@
+    cmd/internal/obj: add arm64 vector compare instructions
+
+diff --git a/src/cmd/asm/internal/asm/testdata/arm64.s b/src/cmd/asm/internal/asm/testdata/arm64.s
+index 4c36396310..d0d2b9e4a5 100644
+--- a/src/cmd/asm/internal/asm/testdata/arm64.s
++++ b/src/cmd/asm/internal/asm/testdata/arm64.s
+@@ -110,6 +110,23 @@ TEXT       foo(SB), DUPOK|NOSPLIT, $-8
+        VADDP   V1.D2, V2.D2, V3.D2             // 43bce14e
+        VAND    V21.B8, V12.B8, V3.B8           // 831d350e
+        VCMEQ   V1.H4, V2.H4, V3.H4             // 438c612e
++       VCMEQ   $0, V2.H4, V3.H4                // 4398600e
++       VCMGE   V1.H4, V2.H4, V3.H4             // 433c610e
++       VCMGE   $0, V2.H4, V3.H4                // 4388602e
++       VCMGT   V1.H4, V2.H4, V3.H4             // 4334610e
++       VCMGT   $0, V2.H4, V3.H4                // 4388600e
++       VCMHI   V1.H4, V2.H4, V3.H4             // 4334612e
++       VCMHS   V1.H4, V2.H4, V3.H4             // 433c612e
++       VCMLE   $0, V2.H4, V3.H4                // 4398602e
++       VCMLT   $0, V2.H4, V3.H4                // 43a8600e
++       VFCMEQ  V1.H4, V2.H4, V3.H4             // 43e4210e
++       VFCMEQ  $(0.0), V2.H4, V3.H4            // 43d8e00e
++       VFCMGE  V1.H4, V2.H4, V3.H4             // 43e4212e
++       VFCMGE  $(0.0), V2.H4, V3.H4            // 43c8e02e
++       VFCMGT  V1.H4, V2.H4, V3.H4             // 43e4a12e
++       VFCMGT  $(0.0), V2.H4, V3.H4            // 43c8e00e
++       VFCMLE  $(0.0), V2.H4, V3.H4            // 43d8e02e
++       VFCMLT  $(0.0), V2.H4, V3.H4            // 43e8e00e
+        VORR    V5.B16, V4.B16, V3.B16          // 831ca54e
+        VADD    V16.S4, V5.S4, V9.S4            // a984b04e
+        VEOR    V0.B16, V1.B16, V0.B16          // 201c206e
+diff --git a/src/cmd/internal/obj/arm64/a.out.go b/src/cmd/internal/obj/arm64/a.out.go
+index 8ebe7fd155..7494d341e8 100644
+--- a/src/cmd/internal/obj/arm64/a.out.go
++++ b/src/cmd/internal/obj/arm64/a.out.go
+@@ -957,6 +957,12 @@ const (
+        AVBIT
+        AVBSL
+        AVCMEQ
++       AVCMGE
++       AVCMGT
++       AVCMHI
++       AVCMHS
++       AVCMLE
++       AVCMLT
+        AVCMTST
+        AVCNT
+        AVDUP
+@@ -965,6 +971,11 @@ const (
+        AVEXT
+        AVFMLA
+        AVFMLS
++       AVFCMEQ
++       AVFCMGE
++       AVFCMGT
++       AVFCMLE
++       AVFCMLT
+        AVLD1
+        AVLD1R
+        AVLD2
+diff --git a/src/cmd/internal/obj/arm64/anames.go b/src/cmd/internal/obj/arm64/anames.go
+index ad6bf42771..de80094dd2 100644
+--- a/src/cmd/internal/obj/arm64/anames.go
++++ b/src/cmd/internal/obj/arm64/anames.go
+@@ -475,6 +475,12 @@ var Anames = []string{
+        "VBIT",
+        "VBSL",
+        "VCMEQ",
++       "VCMGE",
++       "VCMGT",
++       "VCMHI",
++       "VCMHS",
++       "VCMLE",
++       "VCMLT",
+        "VCMTST",
+        "VCNT",
+        "VDUP",
+@@ -483,6 +489,11 @@ var Anames = []string{
+        "VEXT",
+        "VFMLA",
+        "VFMLS",
++       "VFCMEQ",
++       "VFCMGE",
++       "VFCMGT",
++       "VFCMLE",
++       "VFCMLT",
+        "VLD1",
+        "VLD1R",
+        "VLD2",
+diff --git a/src/cmd/internal/obj/arm64/asm7.go b/src/cmd/internal/obj/arm64/asm7.go
+index ce9446f10e..b5f8953b95 100644
+--- a/src/cmd/internal/obj/arm64/asm7.go
++++ b/src/cmd/internal/obj/arm64/asm7.go
+@@ -381,6 +381,12 @@ var optab = []Optab{
+        {AFCMPS, C_FREG, C_FREG, C_NONE, C_NONE, C_NONE, 56, 4, 0, 0, 0},
+        {AFCMPS, C_FCON, C_FREG, C_NONE, C_NONE, C_NONE, 56, 4, 0, 0, 0},
+        {AVADDP, C_ARNG, C_ARNG, C_NONE, C_ARNG, C_NONE, 72, 4, 0, 0, 0},
++       {AVCMEQ, C_ARNG, C_ARNG, C_NONE, C_ARNG, C_NONE, 72, 4, 0, 0, 0},
++       {AVCMEQ, C_ZCON, C_ARNG, C_NONE, C_ARNG, C_NONE, 108, 4, 0, 0, 0},
++       {AVCMLE, C_ZCON, C_ARNG, C_NONE, C_ARNG, C_NONE, 108, 4, 0, 0, 0},
++       {AVFCMEQ, C_ARNG, C_ARNG, C_NONE, C_ARNG, C_NONE, 72, 4, 0, 0, 0},
++       {AVFCMEQ, C_FCON, C_ARNG, C_NONE, C_ARNG, C_NONE, 108, 4, 0, 0, 0},
++       {AVFCMLE, C_FCON, C_ARNG, C_NONE, C_ARNG, C_NONE, 108, 4, 0, 0, 0},
+        {AVADD, C_ARNG, C_ARNG, C_NONE, C_ARNG, C_NONE, 72, 4, 0, 0, 0},
+        {AVADD, C_VREG, C_VREG, C_NONE, C_VREG, C_NONE, 89, 4, 0, 0, 0},
+        {AVADD, C_VREG, C_NONE, C_NONE, C_VREG, C_NONE, 89, 4, 0, 0, 0},
+@@ -3335,17 +3341,32 @@ func buildop(ctxt *obj.Link) {
+
+                case AVADDP:
+                        oprangeset(AVAND, t)
+-                       oprangeset(AVCMEQ, t)
+                        oprangeset(AVORR, t)
+                        oprangeset(AVEOR, t)
+                        oprangeset(AVBSL, t)
++                       oprangeset(AVBIF, t)
+                        oprangeset(AVBIT, t)
+                        oprangeset(AVCMTST, t)
++                       oprangeset(AVCMHI, t)
++                       oprangeset(AVCMHS, t)
+                        oprangeset(AVUMAX, t)
+                        oprangeset(AVUMIN, t)
+                        oprangeset(AVUZP1, t)
+                        oprangeset(AVUZP2, t)
+-                       oprangeset(AVBIF, t)
++
++               case AVCMEQ:
++                       oprangeset(AVCMGE, t)
++                       oprangeset(AVCMGT, t)
++
++               case AVCMLE:
++                       oprangeset(AVCMLT, t)
++
++               case AVFCMEQ:
++                       oprangeset(AVFCMGE, t)
++                       oprangeset(AVFCMGT, t)
++
++               case AVFCMLE:
++                       oprangeset(AVFCMLT, t)
+
+                case AVADD:
+                        oprangeset(AVSUB, t)
+@@ -4952,7 +4973,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
+                        size = 1
+                case AVORR, AVBIT, AVBIF:
+                        size = 2
+-               case AVFMLA, AVFMLS, AVFADD:
++               case AVFMLA, AVFMLS, AVFADD, AVFCMEQ, AVFCMGE, AVFCMGT:
+                        if af == ARNG_2D {
+                                size = 1
+                        } else {
+@@ -6033,6 +6054,49 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
+                        o1 |= uint32(0x1F)
+                }
+                o1 |= uint32(SYSARG4(int(op.op1), int(op.cn), int(op.cm), int(op.op2)))
++
++       case 108: /* [cm|fcm][eq|ge|gt|le|lt] $0, Vn.<T>, Vd.<T> */
++               // Encoding is same as case 83 (this is a separate case because $0 occupies p.From)
++               if !(p.From.Type == obj.TYPE_CONST && p.From.Offset == 0) &&
++                       !(p.From.Type == obj.TYPE_FCONST && p.From.Val.(float64) == 0.0) {
++                       c.ctxt.Diag("expected a constant zero immediate operand: %v\n", p)
++               }
++               an := int((p.Reg >> 5) & 15)
++               ad := int((p.To.Reg >> 5) & 15)
++               if an != ad {
++                       c.ctxt.Diag("operand mismatch: %v", p)
++                       break
++               }
++               var Q, size uint32
++               switch an {
++               case ARNG_16B:
++                       Q = 1
++                       size = 0
++               case ARNG_2D:
++                       Q = 1
++                       size = 3
++               case ARNG_2S:
++                       Q = 0
++                       size = 2
++               case ARNG_4H:
++                       Q = 0
++                       size = 1
++               case ARNG_4S:
++                       Q = 1
++                       size = 2
++               case ARNG_8B:
++                       Q = 0
++                       size = 0
++               case ARNG_8H:
++                       Q = 1
++                       size = 1
++               default:
++                       c.ctxt.Diag("invalid arrangement: %v", p)
++               }
++               o1 = c.opirr(p, p.As)
++               rd := uint32(p.To.Reg & 31)
++               rn := uint32(p.Reg & 31)
++               o1 |= Q<<30 | size<<22 | (rn << 5) | (rd)
+        }
+        out[0] = o1
+        out[1] = o2
+@@ -6633,6 +6697,27 @@ func (c *ctxt7) oprrr(p *obj.Prog, a obj.As) uint32 {
+        case AVCMEQ:
+                return ASIMDSAME(1, 0, 0x11)
+
++       case AVCMGE:
++               return ASIMDSAME(0, 0, 0x07)
++
++       case AVCMGT:
++               return ASIMDSAME(0, 0, 0x06)
++
++       case AVCMHI:
++               return ASIMDSAME(1, 0, 0x06)
++
++       case AVCMHS:
++               return ASIMDSAME(1, 0, 0x07)
++
++       case AVFCMEQ:
++               return ASIMDSAME(0, 0, 0x1C)
++
++       case AVFCMGE:
++               return ASIMDSAME(1, 0, 0x1C)
++
++       case AVFCMGT:
++               return ASIMDSAME(1, 2, 0x1C)
++
+        case AVCNT:
+                return ASIMDMISC(0, 0, 0x05)
+
+@@ -6912,6 +6997,36 @@ func (c *ctxt7) opirr(p *obj.Prog, a obj.As) uint32 {
+        case AHINT:
+                return SYSOP(0, 0, 3, 2, 0, 0, 0x1F)
+
++       case AVCMEQ:
++               return ASIMDMISC(0, 0, 0x09)
++
++       case AVCMGE:
++               return ASIMDMISC(1, 0, 0x08)
++
++       case AVCMGT:
++               return ASIMDMISC(0, 0, 0x08)
++
++       case AVCMLE:
++               return ASIMDMISC(1, 0, 0x09)
++
++       case AVCMLT:
++               return ASIMDMISC(0, 0, 0x0A)
++
++       case AVFCMEQ:
++               return ASIMDMISC(0, 2, 0x0D)
++
++       case AVFCMGE:
++               return ASIMDMISC(1, 2, 0x0C)
++
++       case AVFCMGT:
++               return ASIMDMISC(0, 2, 0x0C)
++
++       case AVFCMLE:
++               return ASIMDMISC(1, 2, 0x0D)
++
++       case AVFCMLT:
++               return ASIMDMISC(0, 2, 0x0E)
++
+        case AVEXT:
+                return 0x2E<<24 | 0<<23 | 0<<21 | 0<<15
+
