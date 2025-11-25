@@ -1,0 +1,29 @@
+// 3-16 bytes memeq (enabled only with support of unaligned loads and 8-byte max word size)
+
+(MemEq p q (Const64 [c]) mem)
+  && (c == 3 || c == 5 || c == 9)
+  && canLoadUnaligned(config)
+  && config.RegSize == 8
+  => (AndB (MemEq p q (Const64 <typ.Int64> [c-1]) mem)
+           (Eq8 (Load <typ.Int8> (OffPtr <p.Type> p [c-1]) mem) (Load <typ.Int8> (OffPtr <q.Type> q [c-1]) mem)))
+
+(MemEq p q (Const64 [c]) mem)
+  && (c == 6 || c == 10)
+  && canLoadUnaligned(config)
+  && config.RegSize == 8
+  => (AndB (MemEq p q (Const64 <typ.Int64> [c-2]) mem)
+           (Eq16 (Load <typ.Int16> (OffPtr <p.Type> p [c-2]) mem) (Load <typ.Int16> (OffPtr <q.Type> q [c-2]) mem)))
+
+(MemEq p q (Const64 [c]) mem)
+  && (c == 7 || c == 11)
+  && canLoadUnaligned(config)
+  && config.RegSize == 8
+  => (AndB (MemEq p q (Const64 <typ.Int64> [c-3]) mem)
+           (Eq32 (Load <typ.Int32> (OffPtr <p.Type> p [c-4]) mem) (Load <typ.Int32> (OffPtr <q.Type> q [c-4]) mem)))
+
+(MemEq p q (Const64 [c]) mem)
+  && (c >= 12 && c <= 16)
+  && canLoadUnaligned(config)
+  && config.RegSize == 8
+  => (AndB (Eq64 (Load <typ.Int64> p mem) (Load <typ.Int64> q mem))
+           (Eq64 (Load <typ.Int64> (OffPtr <p.Type> p [c-8]) mem) (Load <typ.Int64> (OffPtr <q.Type> q [c-8]) mem)))
