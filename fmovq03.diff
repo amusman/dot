@@ -1,0 +1,750 @@
+diff --git a/src/cmd/compile/internal/arm64/ssa.go b/src/cmd/compile/internal/arm64/ssa.go
+index 74371104a3..2cc5083585 100644
+--- a/src/cmd/compile/internal/arm64/ssa.go
++++ b/src/cmd/compile/internal/arm64/ssa.go
+@@ -510,14 +510,15 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+ 		ssa.OpARM64MOVWUload,
+ 		ssa.OpARM64MOVDload,
+ 		ssa.OpARM64FMOVSload,
+-		ssa.OpARM64FMOVDload:
++		ssa.OpARM64FMOVDload,
++		ssa.OpARM64FMOVQload:
+ 		p := s.Prog(v.Op.Asm())
+ 		p.From.Type = obj.TYPE_MEM
+ 		p.From.Reg = v.Args[0].Reg()
+ 		ssagen.AddAux(&p.From, v)
+ 		p.To.Type = obj.TYPE_REG
+ 		p.To.Reg = v.Reg()
+-	case ssa.OpARM64LDP, ssa.OpARM64LDPW, ssa.OpARM64LDPSW, ssa.OpARM64FLDPD, ssa.OpARM64FLDPS:
++	case ssa.OpARM64LDP, ssa.OpARM64LDPW, ssa.OpARM64LDPSW, ssa.OpARM64FLDPD, ssa.OpARM64FLDPS, ssa.OpARM64FLDPQ:
+ 		p := s.Prog(v.Op.Asm())
+ 		p.From.Type = obj.TYPE_MEM
+ 		p.From.Reg = v.Args[0].Reg()
+@@ -560,6 +561,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+ 		ssa.OpARM64MOVDstore,
+ 		ssa.OpARM64FMOVSstore,
+ 		ssa.OpARM64FMOVDstore,
++		ssa.OpARM64FMOVQstore,
+ 		ssa.OpARM64STLRB,
+ 		ssa.OpARM64STLR,
+ 		ssa.OpARM64STLRW:
+@@ -584,7 +586,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+ 		p.To = genIndexedOperand(v.Op, v.Args[0].Reg(), v.Args[1].Reg())
+ 		p.From.Type = obj.TYPE_REG
+ 		p.From.Reg = v.Args[2].Reg()
+-	case ssa.OpARM64STP, ssa.OpARM64STPW, ssa.OpARM64FSTPD, ssa.OpARM64FSTPS:
++	case ssa.OpARM64STP, ssa.OpARM64STPW, ssa.OpARM64FSTPD, ssa.OpARM64FSTPS, ssa.OpARM64FSTPQ:
+ 		p := s.Prog(v.Op.Asm())
+ 		p.From.Type = obj.TYPE_REGREG
+ 		p.From.Reg = v.Args[1].Reg()
+diff --git a/src/cmd/compile/internal/ssa/_gen/ARM64.rules b/src/cmd/compile/internal/ssa/_gen/ARM64.rules
+index 4ade43f1a1..c9d3a5f3dd 100644
+--- a/src/cmd/compile/internal/ssa/_gen/ARM64.rules
++++ b/src/cmd/compile/internal/ssa/_gen/ARM64.rules
+@@ -434,33 +434,25 @@
+ (Move [15] dst src mem) =>
+ 	(MOVDstore [7] dst (MOVDload [7] src mem)
+ 		(MOVDstore dst (MOVDload src mem) mem))
+-(Move [16] dst src mem) =>
+-	(STP dst (Select0 <typ.UInt64> (LDP src mem)) (Select1 <typ.UInt64> (LDP src mem)) mem)
++(Move [16] dst src mem) => (FMOVQstore dst (FMOVQload src mem) mem)
+ 
+ (Move [s] dst src mem) && s > 16 && s <= 24 =>
+ 	(MOVDstore [int32(s-8)] dst (MOVDload [int32(s-8)] src mem)
+-		(STP dst (Select0 <typ.UInt64> (LDP src mem)) (Select1 <typ.UInt64> (LDP src mem)) mem))
+-(Move [s] dst src mem) && s > 24 && s <= 32 =>
+-	(STP [int32(s-16)] dst (Select0 <typ.UInt64> (LDP [int32(s-16)] src mem)) (Select1 <typ.UInt64> (LDP [int32(s-16)] src mem))
+-		(STP dst (Select0 <typ.UInt64> (LDP src mem)) (Select1 <typ.UInt64> (LDP src mem)) mem))
++		(FMOVQstore dst (FMOVQload src mem) mem))
++(Move [s] dst src mem) && s > 24 && s < 32 =>
++	(FMOVQstore [int32(s-16)] dst (FMOVQload [int32(s-16)] src mem)
++		(FMOVQstore dst (FMOVQload src mem) mem))
++(Move [32] dst src mem) =>
++	(FSTPQ dst (Select0 <typ.Vec128> (FLDPQ src mem)) (Select1 <typ.Vec128> (FLDPQ src mem)) mem)
+ (Move [s] dst src mem) && s > 32 && s <= 40 =>
+ 	(MOVDstore [int32(s-8)] dst (MOVDload [int32(s-8)] src mem)
+-		(STP [16] dst (Select0 <typ.UInt64> (LDP [16] src mem)) (Select1 <typ.UInt64> (LDP [16] src mem))
+-			(STP dst (Select0 <typ.UInt64> (LDP src mem)) (Select1 <typ.UInt64> (LDP src mem)) mem)))
++		(FSTPQ dst (Select0 <typ.Vec128> (FLDPQ src mem)) (Select1 <typ.Vec128> (FLDPQ src mem)) mem))
+ (Move [s] dst src mem) && s > 40 && s <= 48 =>
+-	(STP [int32(s-16)] dst (Select0 <typ.UInt64> (LDP [int32(s-16)] src mem)) (Select1 <typ.UInt64> (LDP [int32(s-16)] src mem))
+-		(STP [16] dst (Select0 <typ.UInt64> (LDP [16] src mem)) (Select1 <typ.UInt64> (LDP [16] src mem))
+-			(STP dst (Select0 <typ.UInt64> (LDP src mem)) (Select1 <typ.UInt64> (LDP src mem)) mem)))
+-(Move [s] dst src mem) && s > 48 && s <= 56 =>
+-	(MOVDstore [int32(s-8)] dst (MOVDload [int32(s-8)] src mem)
+-		(STP [32] dst (Select0 <typ.UInt64> (LDP [32] src mem)) (Select1 <typ.UInt64> (LDP [32] src mem))
+-			(STP [16] dst (Select0 <typ.UInt64> (LDP [16] src mem)) (Select1 <typ.UInt64> (LDP [16] src mem))
+-				(STP dst (Select0 <typ.UInt64> (LDP src mem)) (Select1 <typ.UInt64> (LDP src mem)) mem))))
+-(Move [s] dst src mem) && s > 56 && s <= 64 =>
+-	(STP [int32(s-16)] dst (Select0 <typ.UInt64> (LDP [int32(s-16)] src mem)) (Select1 <typ.UInt64> (LDP [int32(s-16)] src mem))
+-		(STP [32] dst (Select0 <typ.UInt64> (LDP [32] src mem)) (Select1 <typ.UInt64> (LDP [32] src mem))
+-			(STP [16] dst (Select0 <typ.UInt64> (LDP [16] src mem)) (Select1 <typ.UInt64> (LDP [16] src mem))
+-				(STP dst (Select0 <typ.UInt64> (LDP src mem)) (Select1 <typ.UInt64> (LDP src mem)) mem))))
++        (FMOVQstore [int32(s-16)] dst (FMOVQload [int32(s-16)] src mem)
++		(FSTPQ dst (Select0 <typ.Vec128> (FLDPQ src mem)) (Select1 <typ.Vec128> (FLDPQ src mem)) mem))
++(Move [s] dst src mem) && s > 48 && s <= 64 =>
++        (FSTPQ [int32(s-32)] dst (Select0 <typ.Vec128> (FLDPQ [int32(s-32)] src mem)) (Select1 <typ.Vec128> (FLDPQ [int32(s-32)] src mem))
++		(FSTPQ dst (Select0 <typ.Vec128> (FLDPQ src mem)) (Select1 <typ.Vec128> (FLDPQ src mem)) mem))
+ 
+ (Move [s] dst src mem) && s > 64 && s < 192 && logLargeCopy(v, s) => (LoweredMove [s] dst src mem)
+ (Move [s] dst src mem) && s >= 192 && logLargeCopy(v, s) => (LoweredMoveLoop [s] dst src mem)
+@@ -688,6 +680,12 @@
+ (FMOVDload [off1] {sym} (ADDconst [off2] ptr) mem) && is32Bit(int64(off1)+off2)
+ 	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
+ 	(FMOVDload [off1+int32(off2)] {sym} ptr mem)
++(FMOVQload [off1] {sym} (ADDconst [off2] ptr) mem) && is32Bit(int64(off1)+off2)
++	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
++	(FMOVQload [off1+int32(off2)] {sym} ptr mem)
++(FLDPQ [off1] {sym} (ADDconst [off2] ptr) mem) && is32Bit(int64(off1)+off2)
++	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
++	(FLDPQ [off1+int32(off2)] {sym} ptr mem)
+ 
+ // register indexed load
+ (MOVDload  [off] {sym} (ADD ptr idx) mem) && off == 0 && sym == nil => (MOVDloadidx ptr idx mem)
+@@ -773,6 +771,12 @@
+ (FMOVDstore [off1] {sym} (ADDconst [off2] ptr) val mem) && is32Bit(int64(off1)+off2)
+ 	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
+ 	(FMOVDstore [off1+int32(off2)] {sym} ptr val mem)
++(FMOVQstore [off1] {sym} (ADDconst [off2] ptr) val mem) && is32Bit(int64(off1)+off2)
++	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
++	(FMOVQstore [off1+int32(off2)] {sym} ptr val mem)
++(FSTPQ [off1] {sym} (ADDconst [off2] ptr) val1 val2 mem) && is32Bit(int64(off1)+off2)
++	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
++	(FSTPQ [off1+int32(off2)] {sym} ptr val1 val2 mem)
+ 
+ // register indexed store
+ (MOVDstore  [off] {sym} (ADD ptr idx) val mem) && off == 0 && sym == nil => (MOVDstoreidx ptr idx val mem)
+@@ -859,6 +863,14 @@
+ 	&& canMergeSym(sym1,sym2) && is32Bit(int64(off1)+int64(off2))
+ 	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
+ 	(FMOVDload [off1+off2] {mergeSym(sym1,sym2)} ptr mem)
++(FMOVQload [off1] {sym1} (MOVDaddr [off2] {sym2} ptr) mem)
++	&& canMergeSym(sym1,sym2) && is32Bit(int64(off1)+int64(off2))
++	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
++	(FMOVQload [off1+off2] {mergeSym(sym1,sym2)} ptr mem)
++(FLDPQ [off1] {sym1} (MOVDaddr [off2] {sym2} ptr) mem)
++	&& canMergeSym(sym1,sym2) && is32Bit(int64(off1)+int64(off2))
++	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
++	(FLDPQ [off1+off2] {mergeSym(sym1,sym2)} ptr mem)
+ 
+ (MOVBstore [off1] {sym1} (MOVDaddr [off2] {sym2} ptr) val mem)
+ 	&& canMergeSym(sym1,sym2) && is32Bit(int64(off1)+int64(off2))
+@@ -888,6 +900,14 @@
+ 	&& canMergeSym(sym1,sym2) && is32Bit(int64(off1)+int64(off2))
+ 	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
+ 	(FMOVDstore [off1+off2] {mergeSym(sym1,sym2)} ptr val mem)
++(FMOVQstore [off1] {sym1} (MOVDaddr [off2] {sym2} ptr) val mem)
++	&& canMergeSym(sym1,sym2) && is32Bit(int64(off1)+int64(off2))
++	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
++	(FMOVQstore [off1+off2] {mergeSym(sym1,sym2)} ptr val mem)
++(FSTPQ [off1] {sym1} (MOVDaddr [off2] {sym2} ptr) val1 val2 mem)
++	&& canMergeSym(sym1,sym2) && is32Bit(int64(off1)+int64(off2))
++	&& (ptr.Op != OpSB || !config.ctxt.Flag_dynlink) =>
++	(FSTPQ [off1+off2] {mergeSym(sym1,sym2)} ptr val1 val2 mem)
+ 
+ // replace load from same location as preceding store with zero/sign extension (or copy in case of full width)
+ // these seem to have bad interaction with other rules, resulting in slower code
+diff --git a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+index c84b24cad1..202e3cc033 100644
+--- a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+@@ -395,6 +395,7 @@ func init() {
+ 		{name: "MOVDload", argLength: 2, reg: gpload, aux: "SymOff", asm: "MOVD", typ: "UInt64", faultOnNilArg0: true, symEffect: "Read"},    // load from arg0 + auxInt + aux.  arg1=mem.
+ 		{name: "FMOVSload", argLength: 2, reg: fpload, aux: "SymOff", asm: "FMOVS", typ: "Float32", faultOnNilArg0: true, symEffect: "Read"}, // load from arg0 + auxInt + aux.  arg1=mem.
+ 		{name: "FMOVDload", argLength: 2, reg: fpload, aux: "SymOff", asm: "FMOVD", typ: "Float64", faultOnNilArg0: true, symEffect: "Read"}, // load from arg0 + auxInt + aux.  arg1=mem.
++		{name: "FMOVQload", argLength: 2, reg: fpload, aux: "SymOff", asm: "FMOVQ", typ: "Vec128", faultOnNilArg0: true, symEffect: "Read"},  // load from arg0 + auxInt + aux.  arg1=mem.
+ 
+ 		// LDP instructions load the contents of two adjacent locations in memory into registers.
+ 		// Address to start loading is addr = arg0 + auxInt + aux.
+@@ -407,6 +408,7 @@ func init() {
+ 		{name: "LDPSW", argLength: 2, reg: gpload2, aux: "SymOff", asm: "LDPSW", typ: "(Int32,Int32)", faultOnNilArg0: true, symEffect: "Read"},     // T=int32 (gp reg destination) signed extension
+ 		{name: "FLDPD", argLength: 2, reg: fpload2, aux: "SymOff", asm: "FLDPD", typ: "(Float64,Float64)", faultOnNilArg0: true, symEffect: "Read"}, // T=float64 (fp reg destination)
+ 		{name: "FLDPS", argLength: 2, reg: fpload2, aux: "SymOff", asm: "FLDPS", typ: "(Float32,Float32)", faultOnNilArg0: true, symEffect: "Read"}, // T=float32 (fp reg destination)
++		{name: "FLDPQ", argLength: 2, reg: fpload2, aux: "SymOff", asm: "FLDPQ", typ: "(Vec128,Vec128)", faultOnNilArg0: true, symEffect: "Read"},   // T=vec128 (fp reg destination)
+ 
+ 		// register indexed load
+ 		{name: "MOVDloadidx", argLength: 3, reg: gp2load, asm: "MOVD", typ: "UInt64"},    // load 64-bit dword from arg0 + arg1, arg2 = mem.
+@@ -434,6 +436,7 @@ func init() {
+ 		{name: "MOVDstore", argLength: 3, reg: gpstore, aux: "SymOff", asm: "MOVD", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"},   // store 8 bytes of arg1 to arg0 + auxInt + aux.  arg2=mem.
+ 		{name: "FMOVSstore", argLength: 3, reg: fpstore, aux: "SymOff", asm: "FMOVS", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 4 bytes of arg1 to arg0 + auxInt + aux.  arg2=mem.
+ 		{name: "FMOVDstore", argLength: 3, reg: fpstore, aux: "SymOff", asm: "FMOVD", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 8 bytes of arg1 to arg0 + auxInt + aux.  arg2=mem.
++		{name: "FMOVQstore", argLength: 3, reg: fpstore, aux: "SymOff", asm: "FMOVQ", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // store 16 bytes of arg1 to arg0 + auxInt + aux.  arg2=mem.
+ 
+ 		// STP instructions store the contents of two registers to adjacent locations in memory.
+ 		// Address to start storing is addr = arg0 + auxInt + aux.
+@@ -444,6 +447,7 @@ func init() {
+ 		{name: "STPW", argLength: 4, reg: gpstore2, aux: "SymOff", asm: "STPW", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"},   // T=int32 (gp reg source)
+ 		{name: "FSTPD", argLength: 4, reg: fpstore2, aux: "SymOff", asm: "FSTPD", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // T=float64 (fp reg source)
+ 		{name: "FSTPS", argLength: 4, reg: fpstore2, aux: "SymOff", asm: "FSTPS", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // T=float32 (fp reg source)
++		{name: "FSTPQ", argLength: 4, reg: fpstore2, aux: "SymOff", asm: "FSTPQ", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"}, // T=vec128 (fp reg source)
+ 
+ 		// register indexed store
+ 		{name: "MOVBstoreidx", argLength: 4, reg: gpstore2, asm: "MOVB", typ: "Mem"},     // store 1 byte of arg2 to arg0 + arg1, arg3 = mem.
+diff --git a/src/cmd/internal/obj/arm64/asm7.go b/src/cmd/internal/obj/arm64/asm7.go
+index b271ec62e4..4af615cded 100644
+--- a/src/cmd/internal/obj/arm64/asm7.go
++++ b/src/cmd/internal/obj/arm64/asm7.go
+@@ -1423,9 +1423,9 @@ func roundUp(x, to uint32) uint32 {
+ }
+ 
+ // splitImm24uScaled splits an immediate into a scaled 12 bit unsigned lo value
+-// and an unscaled shifted 12 bit unsigned hi value. These are typically used
+-// by adding or subtracting the hi value and using the lo value as the offset
+-// for a load or store.
++// and an unscaled unsigned hi value (shifted left by 12 bit if necessary).
++// These are typically used by adding or subtracting the hi value and using
++// the lo value as the offset for a load or store.
+ func splitImm24uScaled(v int32, shift int) (int32, int32, error) {
+ 	if v < 0 {
+ 		return 0, 0, fmt.Errorf("%d is not a 24 bit unsigned immediate", v)
+@@ -1433,11 +1433,14 @@ func splitImm24uScaled(v int32, shift int) (int32, int32, error) {
+ 	if v > 0xfff000+0xfff<<shift {
+ 		return 0, 0, fmt.Errorf("%d is too large for a scaled 24 bit unsigned immediate", v)
+ 	}
++	lo := (v >> shift) & 0xfff
++	hi := v - (lo << shift)
++	if hi <= 0xfff {
++		return hi, lo, nil
++	}
+ 	if v&((1<<shift)-1) != 0 {
+ 		return 0, 0, fmt.Errorf("%d is not a multiple of %d", v, 1<<shift)
+ 	}
+-	lo := (v >> shift) & 0xfff
+-	hi := v - (lo << shift)
+ 	if hi > 0xfff000 {
+ 		hi = 0xfff000
+ 		lo = (v - hi) >> shift
+@@ -1999,28 +2002,28 @@ func (c *ctxt7) loadStoreClass(p *obj.Prog, lsc int, v int64) int {
+ 		if cmp(C_UAUTO8K, lsc) || cmp(C_UOREG8K, lsc) {
+ 			return lsc
+ 		}
+-		if v >= 0 && v <= 0xfff000+0xfff<<1 && v&1 == 0 {
++		if v >= 0 && (v <= 0xfff+0xfff<<1 || v <= 0xfff000+0xfff<<1 && v&1 == 0) {
+ 			needsPool = false
+ 		}
+ 	case AMOVW, AMOVWU, AFMOVS:
+ 		if cmp(C_UAUTO16K, lsc) || cmp(C_UOREG16K, lsc) {
+ 			return lsc
+ 		}
+-		if v >= 0 && v <= 0xfff000+0xfff<<2 && v&3 == 0 {
++		if v >= 0 && (v <= 0xfff+0xfff<<2 || v <= 0xfff000+0xfff<<2 && v&3 == 0) {
+ 			needsPool = false
+ 		}
+ 	case AMOVD, AFMOVD:
+ 		if cmp(C_UAUTO32K, lsc) || cmp(C_UOREG32K, lsc) {
+ 			return lsc
+ 		}
+-		if v >= 0 && v <= 0xfff000+0xfff<<3 && v&7 == 0 {
++		if v >= 0 && (v <= 0xfff+0xfff<<3 || v <= 0xfff000+0xfff<<3 && v&7 == 0) {
+ 			needsPool = false
+ 		}
+ 	case AFMOVQ:
+ 		if cmp(C_UAUTO64K, lsc) || cmp(C_UOREG64K, lsc) {
+ 			return lsc
+ 		}
+-		if v >= 0 && v <= 0xfff000+0xfff<<4 && v&15 == 0 {
++		if v >= 0 && (v <= 0xfff+0xfff<<4 || v <= 0xfff000+0xfff<<4 && v&15 == 0) {
+ 			needsPool = false
+ 		}
+ 	}
+diff --git a/src/runtime/memmove_test.go b/src/runtime/memmove_test.go
+index 6065a84553..4c8aed8f6b 100644
+--- a/src/runtime/memmove_test.go
++++ b/src/runtime/memmove_test.go
+@@ -779,6 +779,7 @@ func BenchmarkClearFat1040(b *testing.B) {
+ 	}
+ }
+ 
++/*
+ func BenchmarkCopyFat3(b *testing.B) {
+ 	var x [3]byte
+ 	p := new([3]byte)
+@@ -908,6 +909,7 @@ func BenchmarkCopyFat15(b *testing.B) {
+ 		*p = x
+ 	}
+ }
++*/
+ 
+ func BenchmarkCopyFat16(b *testing.B) {
+ 	var x [16 / 4]uint32
+@@ -919,6 +921,16 @@ func BenchmarkCopyFat16(b *testing.B) {
+ 	}
+ }
+ 
++func BenchmarkCopyFat17(b *testing.B) {
++	var x [17]byte
++	p := new([17]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
+ func BenchmarkCopyFat18(b *testing.B) {
+ 	var x [18]byte
+ 	p := new([18]byte)
+@@ -929,6 +941,16 @@ func BenchmarkCopyFat18(b *testing.B) {
+ 	}
+ }
+ 
++func BenchmarkCopyFat19(b *testing.B) {
++	var x [19]byte
++	p := new([19]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
+ func BenchmarkCopyFat20(b *testing.B) {
+ 	var x [20 / 4]uint32
+ 	p := new([20 / 4]uint32)
+@@ -939,6 +961,36 @@ func BenchmarkCopyFat20(b *testing.B) {
+ 	}
+ }
+ 
++func BenchmarkCopyFat21(b *testing.B) {
++	var x [21]byte
++	p := new([21]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat22(b *testing.B) {
++	var x [22]byte
++	p := new([22]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat23(b *testing.B) {
++	var x [23]byte
++	p := new([23]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
+ func BenchmarkCopyFat24(b *testing.B) {
+ 	var x [24 / 4]uint32
+ 	p := new([24 / 4]uint32)
+@@ -949,6 +1001,76 @@ func BenchmarkCopyFat24(b *testing.B) {
+ 	}
+ }
+ 
++func BenchmarkCopyFat25(b *testing.B) {
++	var x [25]byte
++	p := new([25]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat26(b *testing.B) {
++	var x [26]byte
++	p := new([26]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat27(b *testing.B) {
++	var x [27]byte
++	p := new([27]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat28(b *testing.B) {
++	var x [28]byte
++	p := new([28]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat29(b *testing.B) {
++	var x [29]byte
++	p := new([29]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat30(b *testing.B) {
++	var x [30]byte
++	p := new([30]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat31(b *testing.B) {
++	var x [31]byte
++	p := new([31]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
+ func BenchmarkCopyFat32(b *testing.B) {
+ 	var x [32 / 4]uint32
+ 	p := new([32 / 4]uint32)
+@@ -959,6 +1081,316 @@ func BenchmarkCopyFat32(b *testing.B) {
+ 	}
+ }
+ 
++func BenchmarkCopyFat33(b *testing.B) {
++	var x [33]byte
++	p := new([33]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat34(b *testing.B) {
++	var x [34]byte
++	p := new([34]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat35(b *testing.B) {
++	var x [35]byte
++	p := new([35]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat36(b *testing.B) {
++	var x [36 / 4]uint32
++	p := new([36 / 4]uint32)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat37(b *testing.B) {
++	var x [37]byte
++	p := new([37]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat38(b *testing.B) {
++	var x [38]byte
++	p := new([38]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat39(b *testing.B) {
++	var x [39]byte
++	p := new([39]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat40(b *testing.B) {
++	var x [40 / 4]uint32
++	p := new([40 / 4]uint32)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat41(b *testing.B) {
++	var x [41]byte
++	p := new([41]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat42(b *testing.B) {
++	var x [42]byte
++	p := new([42]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat43(b *testing.B) {
++	var x [43]byte
++	p := new([43]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat44(b *testing.B) {
++	var x [44 / 4]uint32
++	p := new([44 / 4]uint32)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat45(b *testing.B) {
++	var x [45]byte
++	p := new([45]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat46(b *testing.B) {
++	var x [46]byte
++	p := new([46]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat47(b *testing.B) {
++	var x [47]byte
++	p := new([47]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat48(b *testing.B) {
++	var x [48 / 4]uint32
++	p := new([48 / 4]uint32)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat49(b *testing.B) {
++	var x [49]byte
++	p := new([49]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat50(b *testing.B) {
++	var x [50]byte
++	p := new([50]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat51(b *testing.B) {
++	var x [51]byte
++	p := new([51]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat52(b *testing.B) {
++	var x [52 / 4]uint32
++	p := new([52 / 4]uint32)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat53(b *testing.B) {
++	var x [53]byte
++	p := new([53]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat54(b *testing.B) {
++	var x [54]byte
++	p := new([54]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat55(b *testing.B) {
++	var x [55]byte
++	p := new([55]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat56(b *testing.B) {
++	var x [56 / 4]uint32
++	p := new([56 / 4]uint32)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat57(b *testing.B) {
++	var x [57]byte
++	p := new([57]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat58(b *testing.B) {
++	var x [58]byte
++	p := new([58]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat59(b *testing.B) {
++	var x [59]byte
++	p := new([59]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat60(b *testing.B) {
++	var x [60 / 4]uint32
++	p := new([60 / 4]uint32)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat61(b *testing.B) {
++	var x [61]byte
++	p := new([61]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat62(b *testing.B) {
++	var x [62]byte
++	p := new([62]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
++func BenchmarkCopyFat63(b *testing.B) {
++	var x [63]byte
++	p := new([63]byte)
++	Escape(p)
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		*p = x
++	}
++}
++
+ func BenchmarkCopyFat64(b *testing.B) {
+ 	var x [64 / 4]uint32
+ 	p := new([64 / 4]uint32)
+@@ -969,6 +1401,7 @@ func BenchmarkCopyFat64(b *testing.B) {
+ 	}
+ }
+ 
++/*
+ func BenchmarkCopyFat72(b *testing.B) {
+ 	var x [72 / 4]uint32
+ 	p := new([72 / 4]uint32)
+@@ -1048,6 +1481,7 @@ func BenchmarkCopyFat1040(b *testing.B) {
+ 		*p = x
+ 	}
+ }
++*/
+ 
+ // BenchmarkIssue18740 ensures that memmove uses 4 and 8 byte load/store to move 4 and 8 bytes.
+ // It used to do 2 2-byte load/stores, which leads to a pipeline stall
