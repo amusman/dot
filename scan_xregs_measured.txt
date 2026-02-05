@@ -1,0 +1,78 @@
+x86_64 Intel(R) Xeon(R) CPU E5-2690 v3 @ 2.60GHz
+                       │   orig.res   │              expu.res              │
+                       │    sec/op    │   sec/op     vs base               │
+BleveIndexBatch100-4      5.797 ±  2%    5.842 ± 2%       ~ (p=0.853 n=10)
+ESBuildThreeJS-4         689.8m ±  1%   691.3m ± 1%       ~ (p=0.853 n=10)
+ESBuildRomeTS-4          181.1m ±  2%   180.3m ± 2%       ~ (p=0.631 n=10)
+EtcdPut-4                142.8m ± 11%   145.4m ± 8%       ~ (p=0.579 n=10)
+EtcdSTM-4                531.1m ±  2%   537.0m ± 2%       ~ (p=0.529 n=10)
+GoBuildKubelet-4          143.4 ±  1%    143.7 ± 1%       ~ (p=0.529 n=10)
+GoBuildKubeletLink-4      9.955 ±  0%   10.014 ± 1%  +0.59% (p=0.007 n=10)
+GoBuildIstioctl-4         116.0 ±  1%    115.7 ± 1%       ~ (p=0.796 n=10)
+GoBuildIstioctlLink-4     10.27 ±  0%    10.29 ± 0%  +0.23% (p=0.023 n=10)
+GoBuildFrontend-4         40.51 ±  1%    40.37 ± 1%       ~ (p=0.739 n=10)
+GoBuildFrontendLink-4     1.755 ±  1%    1.757 ± 1%       ~ (p=0.436 n=10)
+GoBuildTsgo-4             66.24 ±  1%    66.11 ± 0%       ~ (p=0.190 n=10)
+GoBuildTsgoLink-4        883.6m ±  1%   887.0m ± 1%       ~ (p=0.063 n=10)
+GopherLuaKNucleotide-4    27.53 ±  2%    27.59 ± 1%       ~ (p=0.796 n=10)
+MarkdownRenderXHTML-4    239.4m ±  0%   239.4m ± 0%       ~ (p=0.579 n=10)
+Tile38QueryLoad-4        522.2µ ±  1%   520.6µ ± 1%       ~ (p=0.529 n=10)
+geomean                   2.415          2.421       +0.25%
+
+                       │     orig.res      │                 expu.res                 │
+                       │ average-RSS-bytes │ average-RSS-bytes  vs base               │
+BleveIndexBatch100-4          206.7Mi ± 0%        206.7Mi ± 1%       ~ (p=0.853 n=10)
+EtcdPut-4                     108.9Mi ± 4%        107.3Mi ± 3%       ~ (p=0.123 n=10)
+EtcdSTM-4                    100.58Mi ± 3%        97.44Mi ± 2%  -3.12% (p=0.009 n=10)
+GopherLuaKNucleotide-4        35.32Mi ± 4%        35.41Mi ± 2%       ~ (p=0.631 n=10)
+MarkdownRenderXHTML-4         21.51Mi ± 8%        21.25Mi ± 5%       ~ (p=0.072 n=10)
+Tile38QueryLoad-4             5.414Gi ± 1%        5.405Gi ± 1%       ~ (p=0.529 n=10)
+geomean                       145.6Mi             144.2Mi       -0.96%
+
+                       │    orig.res    │               expu.res                │
+                       │ peak-RSS-bytes │ peak-RSS-bytes  vs base               │
+BleveIndexBatch100-4       296.4Mi ± 2%    298.2Mi ±  2%       ~ (p=0.631 n=10)
+EtcdPut-4                  150.1Mi ± 7%    144.0Mi ±  4%       ~ (p=0.063 n=10)
+EtcdSTM-4                  126.0Mi ± 2%    123.1Mi ±  2%  -2.29% (p=0.015 n=10)
+GopherLuaKNucleotide-4     37.24Mi ± 1%    37.21Mi ±  1%       ~ (p=1.000 n=10)
+MarkdownRenderXHTML-4      21.77Mi ± 9%    21.62Mi ± 10%       ~ (p=0.383 n=10)
+Tile38QueryLoad-4          5.471Gi ± 1%    5.483Gi ±  1%       ~ (p=0.853 n=10)
+geomean                    171.5Mi         169.7Mi        -1.06%
+
+                       │   orig.res    │               expu.res               │
+                       │ peak-VM-bytes │ peak-VM-bytes  vs base               │
+BleveIndexBatch100-4      1.968Gi ± 0%    1.968Gi ± 3%       ~ (p=0.072 n=10)
+EtcdPut-4                 11.35Gi ± 0%    11.35Gi ± 0%       ~ (p=0.379 n=10)
+EtcdSTM-4                 11.35Gi ± 1%    11.29Gi ± 1%       ~ (p=0.071 n=10)
+GopherLuaKNucleotide-4    1.174Gi ± 5%    1.174Gi ± 5%       ~ (p=1.000 n=10)
+MarkdownRenderXHTML-4     1.206Gi ± 3%    1.174Gi ± 5%       ~ (p=0.148 n=10)
+Tile38QueryLoad-4         6.652Gi ± 1%    6.651Gi ± 1%       ~ (p=0.424 n=10)
+geomean                   3.656Gi         3.637Gi       -0.53%
+
+                  │    orig.res     │                expu.res                │
+                  │ p50-latency-sec │ p50-latency-sec  vs base               │
+EtcdPut-4               144.7m ± 8%       145.0m ± 8%       ~ (p=0.796 n=10)
+EtcdSTM-4               370.6m ± 2%       373.9m ± 2%       ~ (p=0.631 n=10)
+Tile38QueryLoad-4       250.7µ ± 0%       250.0µ ± 0%  -0.29% (p=0.007 n=10)
+geomean                 23.78m            23.84m       +0.27%
+
+                  │    orig.res     │                expu.res                │
+                  │ p90-latency-sec │ p90-latency-sec  vs base               │
+EtcdPut-4              195.7m ± 12%       205.2m ± 5%       ~ (p=0.165 n=10)
+EtcdSTM-4               1.101 ±  2%        1.114 ± 3%       ~ (p=0.529 n=10)
+Tile38QueryLoad-4      846.1µ ±  0%       843.9µ ± 1%       ~ (p=0.436 n=10)
+geomean                56.71m             57.78m       +1.90%
+
+                  │    orig.res     │                expu.res                │
+                  │ p99-latency-sec │ p99-latency-sec  vs base               │
+EtcdPut-4              254.2m ± 11%      261.9m ± 11%       ~ (p=0.529 n=10)
+EtcdSTM-4               2.415 ±  3%       2.444 ±  3%       ~ (p=0.247 n=10)
+Tile38QueryLoad-4      4.797m ±  1%      4.789m ±  1%       ~ (p=0.436 n=10)
+geomean                143.3m            145.3m        +1.35%
+
+                  │   orig.res   │              expu.res              │
+                  │    ops/s     │    ops/s     vs base               │
+EtcdPut-4           6.907k ± 10%   6.806k ± 8%       ~ (p=0.529 n=10)
+EtcdSTM-4           1.867k ±  3%   1.842k ± 3%       ~ (p=0.342 n=10)
+Tile38QueryLoad-4   5.745k ±  1%   5.762k ± 1%       ~ (p=0.529 n=10)
+geomean             4.200k         4.165k       -0.85%
