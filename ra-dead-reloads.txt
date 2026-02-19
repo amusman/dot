@@ -1,0 +1,503 @@
+commit bf0a1b1e493a8af44ccc978f7a7e23cbdd07b8d7
+Author: Alexander Musman <musman.alexander@huawei.com>
+Date:   Fri Oct 31 12:16:28 2025 +0000
+
+    ra: prune startRegs to avoid dead reloads
+
+diff --git a/src/cmd/compile/internal/ssa/regalloc.go b/src/cmd/compile/internal/ssa/regalloc.go
+index c1cef741fa..a358938aa3 100644
+--- a/src/cmd/compile/internal/ssa/regalloc.go
++++ b/src/cmd/compile/internal/ssa/regalloc.go
+@@ -138,9 +138,10 @@ const (
+ // distance is a measure of how far into the future values are used.
+ // distance is measured in units of instructions.
+ const (
+-	likelyDistance   = 1
+-	normalDistance   = 10
+-	unlikelyDistance = 100
++	likelyDistance    = 1
++	normalDistance    = 10
++	unlikelyDistance  = 100
++	clobberedDistance = 1 << 28 // used only after a call, will be spilled anyway
+ )
+ 
+ // regalloc performs register allocation on f. It sets f.RegAlloc
+@@ -311,6 +312,11 @@ type regAllocState struct {
+ 	// startRegs by dropping from there as well.
+ 	startRegsMask regMask
+ 
++	// masks keep start/end regMask and helper register masks for each block.
++	// They are initialized during register assignment and propagated
++	// before they are synchronized back to startRegs/endRegs.
++	masks []blockMasks
++
+ 	// spillLive[blockid] is the set of live spills at the end of each block
+ 	spillLive [][]ID
+ 
+@@ -354,6 +360,14 @@ type startReg struct {
+ 	pos src.XPos // source position of use of this register
+ }
+ 
++type blockMasks struct {
++	startRegsMask regMask // registers preserved in the startRegs of the block
++	endRegsMask   regMask // registers preserved in the endRegs of the block
++	phiUsed       regMask // registers assigned to phis of the block
++	blockUsed     regMask // registers being read or written in the block
++	endLive       regMask // registers containing values live and not clobbered after the block end
++}
++
+ // freeReg frees up register r. Any current user of r is kicked out.
+ func (s *regAllocState) freeReg(r register) {
+ 	if !s.allocatable.contains(r) && !s.isGReg(r) {
+@@ -801,6 +815,7 @@ func (s *regAllocState) init(f *Func) {
+ 	s.endRegs = make([][]endReg, f.NumBlocks())
+ 	s.startRegs = make([][]startReg, f.NumBlocks())
+ 	s.spillLive = make([][]ID, f.NumBlocks())
++	s.masks = make([]blockMasks, f.NumBlocks())
+ 	s.sdom = f.Sdom()
+ 
+ 	// wasm: Mark instructions that can be optimized to have their values only on the WebAssembly stack.
+@@ -994,6 +1009,20 @@ func (s *regAllocState) isGReg(r register) bool {
+ 	return s.f.Config.hasGReg && s.GReg == r
+ }
+ 
++func pruneCase(n int, f *Func) bool {
++	if !base.HasDebugHash() {
++		return true
++	}
++	sym := f.fe.Func().Sym()
++	name := sym.Name
++	c := fmt.Sprintf("%s-bb%d", name, n)
++	ok := base.DebugHashMatchPkgFunc(sym.Pkg.Path, c)
++	if ok {
++		fmt.Printf("matched: %s\n", c)
++	}
++	return ok
++}
++
+ // Dummy value used to represent the value being held in a temporary register.
+ var tmpVal Value
+ 
+@@ -1132,6 +1161,16 @@ func (s *regAllocState) regalloc(f *Func) {
+ 					s.freeReg(r)
+ 				}
+ 			}
++			// Here our startRegs are same as endRegs of the only predecessor.
++			// Track them anyway for possible propagation up and pruning.
++			s.startRegsMask = 0
++			for r := register(0); r < s.numRegs; r++ {
++				v := s.regs[r].v
++				if v == nil {
++					continue
++				}
++				s.startRegsMask |= regMask(1) << r
++			}
+ 		} else {
+ 			// This is the complicated case. We have more than one predecessor,
+ 			// which means we may have Phi ops.
+@@ -1159,9 +1198,9 @@ func (s *regAllocState) regalloc(f *Func) {
+ 					continue
+ 				}
+ 				pSel := b.Preds[idx].b
+-				if len(s.spillLive[pb.ID]) < len(s.spillLive[pSel.ID]) {
++				if cap(s.spillLive[pb.ID]) < cap(s.spillLive[pSel.ID]) {
+ 					idx = i
+-				} else if len(s.spillLive[pb.ID]) == len(s.spillLive[pSel.ID]) {
++				} else if cap(s.spillLive[pb.ID]) == cap(s.spillLive[pSel.ID]) {
+ 					// Use a bit of likely information. After critical pass, pb and pSel must
+ 					// be plain blocks, so check edge pb->pb.Preds instead of edge pb->b.
+ 					// TODO: improve the prediction of the likely predecessor. The following
+@@ -1245,6 +1284,8 @@ func (s *regAllocState) regalloc(f *Func) {
+ 						s.setOrig(c, a)
+ 						s.assignReg(r2, a, c)
+ 						s.endRegs[p.ID] = append(s.endRegs[p.ID], endReg{r2, a, c})
++						s.masks[p.ID].endRegsMask |= regMask(1) << r2
++						s.masks[p.ID].endLive |= regMask(1) << r2
+ 					}
+ 				}
+ 				s.freeReg(r)
+@@ -1335,6 +1376,7 @@ func (s *regAllocState) regalloc(f *Func) {
+ 			}
+ 			s.startRegs[b.ID] = make([]startReg, len(regList))
+ 			copy(s.startRegs[b.ID], regList)
++			s.masks[b.ID].phiUsed = phiUsed
+ 
+ 			if s.f.pass.debug > regDebug {
+ 				fmt.Printf("after phis\n")
+@@ -2101,6 +2143,38 @@ func (s *regAllocState) regalloc(f *Func) {
+ 	badloop:
+ 		;
+ 
++		if checkEnabled {
++			regValLiveSet.clear()
++			if s.live != nil {
++				for _, x := range s.live[b.ID] {
++					regValLiveSet.add(x.ID)
++				}
++			}
++			for r := register(0); r < s.numRegs; r++ {
++				v := s.regs[r].v
++				if v == nil {
++					continue
++				}
++				if !regValLiveSet.contains(v.ID) {
++					s.f.Fatalf("val %s is in reg but not live at end of %s", v, b)
++				}
++			}
++		}
++
++		// Find live and not-clobbered-by-call registers after end of block.
++		// We'd like to ensure they are preserved in the endRegs. The others
++		// (live but clobbered by call before any use) may be either pruned or not.
++		// We don't prune them eagerly to leave some freedom for placeSpill.
++		regValLiveSet.clear()
++		if s.live != nil {
++			for _, x := range s.live[b.ID] {
++				if x.dist >= clobberedDistance && pruneCase(int(b.ID), f) {
++					continue
++				}
++				regValLiveSet.add(x.ID)
++			}
++		}
++
+ 		// Save end-of-block register state.
+ 		// First count how many, this cuts allocations in half.
+ 		k := 0
+@@ -2112,38 +2186,34 @@ func (s *regAllocState) regalloc(f *Func) {
+ 			k++
+ 		}
+ 		regList := make([]endReg, 0, k)
++		endRegsMask := regMask(0)
++		endLive := regMask(0)
+ 		for r := register(0); r < s.numRegs; r++ {
+ 			v := s.regs[r].v
+ 			if v == nil {
+ 				continue
+ 			}
++			endRegsMask |= regMask(1) << r
+ 			regList = append(regList, endReg{r, v, s.regs[r].c})
++			if !regValLiveSet.contains(v.ID) {
++				continue
++			}
++			endLive |= regMask(1) << r
+ 		}
+ 		s.endRegs[b.ID] = regList
+ 
+-		if checkEnabled {
+-			regValLiveSet.clear()
+-			if s.live != nil {
+-				for _, x := range s.live[b.ID] {
+-					regValLiveSet.add(x.ID)
+-				}
+-			}
+-			for r := register(0); r < s.numRegs; r++ {
+-				v := s.regs[r].v
+-				if v == nil {
+-					continue
+-				}
+-				if !regValLiveSet.contains(v.ID) {
+-					s.f.Fatalf("val %s is in reg but not live at end of %s", v, b)
+-				}
+-			}
+-		}
++		// Remember local state bits, useful to prune block start/end registers.
++		s.masks[b.ID].startRegsMask = s.startRegsMask
++		s.masks[b.ID].endRegsMask = endRegsMask
++		s.masks[b.ID].endLive = endLive
++		s.masks[b.ID].blockUsed = s.usedSinceBlockStart
+ 
+-		// If a value is live at the end of the block and
+-		// isn't in a register, generate a use for the spill location.
+-		// We need to remember this information so that
+-		// the liveness analysis in stackalloc is correct.
+ 		if s.live != nil {
++			// Allocate storage for the values live at the end of current block.
++			// We'll use its capacity in heuristic to choose predecessor of
++			// merge blocks. Also, this may save allocations when we add actual
++			// live-at-end values after pruning block start/end registers.
++			spillLive := 0
+ 			for _, e := range s.live[b.ID] {
+ 				vi := &s.values[e.ID]
+ 				if vi.regs != 0 {
+@@ -2154,11 +2224,10 @@ func (s *regAllocState) regalloc(f *Func) {
+ 					// we'll rematerialize during the merge.
+ 					continue
+ 				}
+-				if s.f.pass.debug > regDebug {
+-					fmt.Printf("live-at-end spill for %s at %s\n", s.orig[e.ID], b)
+-				}
+-				spill := s.makeSpill(s.orig[e.ID], b)
+-				s.spillLive[b.ID] = append(s.spillLive[b.ID], spill.ID)
++				spillLive++
++			}
++			if spillLive != 0 {
++				s.spillLive[b.ID] = make([]ID, 0, spillLive)
+ 			}
+ 
+ 			// Clear any final uses.
+@@ -2177,22 +2246,96 @@ func (s *regAllocState) regalloc(f *Func) {
+ 				s.freeUseRecords = u
+ 			}
+ 		}
++	}
++
++	// Propagate and prune each block's start and end registers masks.
++	changed := true
++	for changed {
++		changed = false
++		for _, b := range s.visitOrder {
++			pruneMask := s.masks[b.ID].startRegsMask &^ (s.masks[b.ID].blockUsed | s.masks[b.ID].phiUsed | s.masks[b.ID].endLive)
++			if pruneMask == 0 {
++				continue
++			}
++			endLive := regMask(0)
++			for _, succ := range b.Succs {
++				endLive |= s.masks[succ.b.ID].startRegsMask | s.masks[succ.b.ID].phiUsed
++			}
++			pruneMask &^= endLive
++			if pruneMask == 0 {
++				continue
++			}
++			if !pruneCase(int(b.ID), f) {
++				continue
++			}
++			// If we are here, b has no reference to any register from pruneMask. So they are
++			// in our startRegsMask only for our endRegsMask, and there are no any successors
++			// using those registers. Thus, prune them in both start and end masks.
++			s.masks[b.ID].startRegsMask &^= pruneMask
++			s.masks[b.ID].endRegsMask &^= pruneMask
++			changed = true
++		}
++	}
+ 
+-		// allocReg may have dropped registers from startRegsMask that
+-		// aren't actually needed in startRegs. Synchronize back to
+-		// startRegs.
+-		//
+-		// This must be done before placing spills, which will look at
+-		// startRegs to decide if a block is a valid block for a spill.
+-		if c := countRegs(s.startRegsMask); c != len(s.startRegs[b.ID]) {
+-			regs := make([]startReg, 0, c)
+-			for _, sr := range s.startRegs[b.ID] {
+-				if s.startRegsMask&(regMask(1)<<sr.r) == 0 {
++	for _, b := range s.visitOrder {
++		if len(b.Preds) > 1 {
++			startRegsMask := s.masks[b.ID].startRegsMask
++			// allocReg and subsequent pruning may have dropped registers
++			// from startRegsMask that aren't actually needed in startRegs.
++			// Synchronize back to startRegs.
++			//
++			// This must be done before placing spills, which will look at
++			// startRegs to decide if a block is a valid block for a spill.
++			if c := countRegs(startRegsMask); c != len(s.startRegs[b.ID]) {
++				regs := make([]startReg, 0, c)
++				for _, sr := range s.startRegs[b.ID] {
++					if startRegsMask&(regMask(1)<<sr.r) == 0 {
++						continue
++					}
++					regs = append(regs, sr)
++				}
++				s.startRegs[b.ID] = regs
++			}
++		}
++		// Pruning may have dropped some of endRegs as well.
++		endRegsMask := s.masks[b.ID].endRegsMask
++		if c := countRegs(endRegsMask); c != len(s.endRegs[b.ID]) {
++			regs := make([]endReg, 0, c)
++			for _, er := range s.endRegs[b.ID] {
++				if endRegsMask&(regMask(1)<<er.r) == 0 {
+ 					continue
+ 				}
+-				regs = append(regs, sr)
++				regs = append(regs, er)
++			}
++			s.endRegs[b.ID] = regs
++		}
++
++		// If a value is live at the end of the block and
++		// isn't in a register, generate a use for the spill location.
++		// We need to remember this information so that
++		// the liveness analysis in stackalloc is correct.
++		if s.live != nil {
++			// Extract endRegs values into regValLiveSet.
++			regValLiveSet.clear()
++			for _, er := range s.endRegs[b.ID] {
++				regValLiveSet.add(er.v.ID)
++			}
++			for _, e := range s.live[b.ID] {
++				if regValLiveSet.contains(e.ID) || opcodeTable[s.orig[e.ID].Op].fixedReg {
++					// in a register, we'll use that source for the merge.
++					continue
++				}
++				vi := &s.values[e.ID]
++				if vi.rematerializeable {
++					// we'll rematerialize during the merge.
++					continue
++				}
++				if s.f.pass.debug > regDebug {
++					fmt.Printf("live-at-end spill for %s at %s\n", s.orig[e.ID], b)
++				}
++				spill := s.makeSpill(s.orig[e.ID], b)
++				s.spillLive[b.ID] = append(s.spillLive[b.ID], spill.ID)
+ 			}
+-			s.startRegs[b.ID] = regs
+ 		}
+ 	}
+ 
+@@ -2977,7 +3120,7 @@ func (s *regAllocState) computeLive() {
+ 					rematIDs = rematIDs[:0]
+ 					c := live.contents()
+ 					for i := range c {
+-						c[i].val += unlikelyDistance
++						c[i].val |= clobberedDistance
+ 						vid := c[i].key
+ 						if s.values[vid].rematerializeable {
+ 							rematIDs = append(rematIDs, vid)
+@@ -3152,7 +3295,7 @@ func (s *regAllocState) computeLive() {
+ 						continue
+ 					}
+ 					dist := int32(len(succ.Values)) + l.dist + branchDistance(b, succ)
+-					dist += numCalls[succ.ID] * unlikelyDistance
++					dist |= min(numCalls[succ.ID], 1) * clobberedDistance
+ 					val := live.get(l.ID)
+ 					switch {
+ 					case val == unknownDistance:
+diff --git a/src/cmd/compile/internal/ssa/regalloc_test.go b/src/cmd/compile/internal/ssa/regalloc_test.go
+index 18d42063fb..1ced6412b1 100644
+--- a/src/cmd/compile/internal/ssa/regalloc_test.go
++++ b/src/cmd/compile/internal/ssa/regalloc_test.go
+@@ -271,8 +271,9 @@ func TestNoRematerializeDeadConstant(t *testing.T) {
+ 		Bloc("b1",
+ 			Valu("mem", OpInitMem, types.TypeMem, 0, nil),
+ 			Valu("addr", OpArg, c.config.Types.Int32.PtrTo(), 0, c.Temp(c.config.Types.Int32.PtrTo())),
+-			Valu("const", OpARM64MOVDconst, c.config.Types.Int32, -1, nil), // Original constant
+-			Valu("cmp", OpARM64CMPconst, types.TypeFlags, 0, nil, "const"),
++			Valu("const", OpARM64MOVDconst, c.config.Types.Int32, -1, nil),           // Original constant
++			Valu("ld", OpARM64MOVDload, c.config.Types.Int32, 0, nil, "addr", "mem"), // Original value to be spilled
++			Valu("cmp", OpARM64CMPW, types.TypeFlags, 0, nil, "const", "ld"),
+ 			Goto("b2"),
+ 		),
+ 		Bloc("b2",
+@@ -284,11 +285,12 @@ func TestNoRematerializeDeadConstant(t *testing.T) {
+ 			Valu("callmem", OpSelectN, types.TypeMem, 0, nil, "call"),
+ 			Eq("cmp", "b5", "b4"),
+ 		),
+-		Bloc("b4", // A block where we don't really need to rematerialize the constant -1
++		Bloc("b4", // A block where we don't really need to rematerialize -1 or reload `ld`
+ 			Goto("b2"),
+ 		),
+ 		Bloc("b5",
+-			Valu("user", OpAMD64MOVQstore, types.TypeMem, 0, nil, "addr", "const", "callmem"),
++			Valu("user0", OpAMD64MOVQstore, types.TypeMem, 0, nil, "addr", "ld", "callmem"),
++			Valu("user", OpAMD64MOVQstore, types.TypeMem, 0, nil, "addr", "const", "user0"),
+ 			Exit("user"),
+ 		),
+ 		Bloc("b6",
+@@ -300,10 +302,14 @@ func TestNoRematerializeDeadConstant(t *testing.T) {
+ 	checkFunc(f.f)
+ 
+ 	// Check that in block b4, there's no dead rematerialization of the constant -1
++	// Also check that nothing is reloaded from a spill slot.
+ 	for _, v := range f.blocks["b4"].Values {
+ 		if v.Op == OpARM64MOVDconst && v.AuxInt == -1 {
+ 			t.Errorf("constant -1 rematerialized in loop block b4: %s", v.LongString())
+ 		}
++		if v.Op == OpLoadReg {
++			t.Errorf("reload in loop block b4: %s", v.LongString())
++		}
+ 	}
+ }
+ 
+
+--- --- ---
+
+Executable            Old .text  New .text     Change
+-------------------------------------------------------
+asm                     2081380    2076100     -0.25%
+cgo                     1768756    1761332     -0.42%
+compile                10547412   10488276     -0.56%
+cover                   1938788    1932196     -0.34%
+fix                     3124740    3111236     -0.43%
+link                    2642484    2633076     -0.36%
+preprofile               893556     890340     -0.36%
+vet                     3023588    3010676     -0.43%
+
+
+                       │ orig.results │            uexp.results            │
+                       │    sec/op    │   sec/op     vs base               │
+BleveIndexBatch100-4       8.053 ± 1%    7.957 ± 2%  -1.20% (p=0.029 n=10)
+ESBuildThreeJS-4          770.1m ± 1%   772.1m ± 1%       ~ (p=0.190 n=10)
+ESBuildRomeTS-4           194.0m ± 1%   195.4m ± 1%       ~ (p=0.218 n=10)
+EtcdPut-4                 65.00m ± 2%   64.92m ± 2%       ~ (p=0.353 n=10)
+EtcdSTM-4                 329.0m ± 1%   327.7m ± 1%       ~ (p=0.247 n=10)
+GoBuildKubelet-4           160.8 ± 0%    160.5 ± 0%       ~ (p=0.063 n=10)
+GoBuildKubeletLink-4       13.14 ± 2%    13.13 ± 0%       ~ (p=0.393 n=10)
+GoBuildIstioctl-4          125.3 ± 0%    125.1 ± 0%       ~ (p=0.063 n=10)
+GoBuildIstioctlLink-4      9.055 ± 1%    9.081 ± 1%       ~ (p=0.315 n=10)
+GoBuildFrontend-4          45.71 ± 1%    45.74 ± 0%       ~ (p=0.853 n=10)
+GoBuildFrontendLink-4      2.371 ± 1%    2.363 ± 1%       ~ (p=0.280 n=10)
+GoBuildTsgo-4              76.24 ± 1%    75.92 ± 1%       ~ (p=0.353 n=10)
+GoBuildTsgoLink-4          1.267 ± 1%    1.262 ± 1%       ~ (p=0.105 n=10)
+GopherLuaKNucleotide-4     33.39 ± 6%    33.38 ± 1%       ~ (p=0.481 n=10)
+MarkdownRenderXHTML-4     272.8m ± 0%   273.5m ± 0%       ~ (p=0.063 n=10)
+Tile38QueryLoad-4         628.7µ ± 1%   630.2µ ± 1%       ~ (p=0.315 n=10)
+geomean                    2.573         2.571       -0.09%
+
+                       │   orig.results    │               uexp.results               │
+                       │ average-RSS-bytes │ average-RSS-bytes  vs base               │
+BleveIndexBatch100-4          200.2Mi ± 1%        200.2Mi ± 1%       ~ (p=0.481 n=10)
+EtcdPut-4                     104.1Mi ± 1%        104.4Mi ± 3%       ~ (p=0.684 n=10)
+EtcdSTM-4                     93.16Mi ± 4%        93.38Mi ± 1%       ~ (p=0.853 n=10)
+GopherLuaKNucleotide-4        35.88Mi ± 5%        36.81Mi ± 3%       ~ (p=0.529 n=10)
+MarkdownRenderXHTML-4         21.22Mi ± 1%        21.16Mi ± 5%       ~ (p=0.781 n=10)
+Tile38QueryLoad-4             5.507Gi ± 1%        5.482Gi ± 1%       ~ (p=0.481 n=10)
+geomean                       142.4Mi             142.9Mi       +0.38%
+
+                       │  orig.results  │             uexp.results              │
+                       │ peak-RSS-bytes │ peak-RSS-bytes  vs base               │
+BleveIndexBatch100-4       286.3Mi ± 2%     285.7Mi ± 1%       ~ (p=0.796 n=10)
+EtcdPut-4                  141.9Mi ± 3%     144.2Mi ± 4%       ~ (p=0.123 n=10)
+EtcdSTM-4                  117.7Mi ± 4%     119.2Mi ± 2%       ~ (p=0.579 n=10)
+GopherLuaKNucleotide-4     37.74Mi ± 5%     37.63Mi ± 5%       ~ (p=0.796 n=10)
+MarkdownRenderXHTML-4      21.53Mi ± 2%     22.54Mi ± 5%       ~ (p=0.105 n=10)
+Tile38QueryLoad-4          5.574Gi ± 1%     5.545Gi ± 1%       ~ (p=0.218 n=10)
+geomean                    167.6Mi          169.4Mi       +1.09%
+
+                       │ orig.results  │             uexp.results             │
+                       │ peak-VM-bytes │ peak-VM-bytes  vs base               │
+BleveIndexBatch100-4      1.967Gi ± 0%    1.967Gi ± 0%       ~ (p=0.896 n=10)
+EtcdPut-4                 11.35Gi ± 0%    11.35Gi ± 0%       ~ (p=0.954 n=10)
+EtcdSTM-4                 11.35Gi ± 1%    11.29Gi ± 1%  -0.55% (p=0.002 n=10)
+GopherLuaKNucleotide-4    1.237Gi ± 5%    1.237Gi ± 5%       ~ (p=0.842 n=10)
+MarkdownRenderXHTML-4     1.174Gi ± 0%    1.174Gi ± 5%       ~ (p=0.456 n=10)
+Tile38QueryLoad-4         6.776Gi ± 1%    6.744Gi ± 0%       ~ (p=0.118 n=10)
+geomean                   3.682Gi         3.676Gi       -0.17%
+
+                  │  orig.results   │              uexp.results              │
+                  │ p50-latency-sec │ p50-latency-sec  vs base               │
+EtcdPut-4               63.05m ± 1%       62.32m ± 3%       ~ (p=0.247 n=10)
+EtcdSTM-4               241.1m ± 1%       241.6m ± 1%       ~ (p=0.853 n=10)
+Tile38QueryLoad-4       276.4µ ± 0%       275.9µ ± 0%       ~ (p=0.314 n=10)
+geomean                 16.14m            16.07m       -0.38%
+
+                  │  orig.results   │              uexp.results              │
+                  │ p90-latency-sec │ p90-latency-sec  vs base               │
+EtcdPut-4               92.99m ± 2%       93.28m ± 3%       ~ (p=0.579 n=10)
+EtcdSTM-4               659.5m ± 1%       656.0m ± 1%       ~ (p=0.280 n=10)
+Tile38QueryLoad-4       993.6µ ± 1%       992.8µ ± 1%       ~ (p=0.796 n=10)
+geomean                 39.35m            39.31m       -0.10%
+
+                  │  orig.results   │              uexp.results              │
+                  │ p99-latency-sec │ p99-latency-sec  vs base               │
+EtcdPut-4               123.0m ± 4%       120.9m ± 4%       ~ (p=0.190 n=10)
+EtcdSTM-4                1.327 ± 1%        1.312 ± 1%       ~ (p=0.165 n=10)
+Tile38QueryLoad-4       6.184m ± 1%       6.192m ± 1%       ~ (p=0.436 n=10)
+geomean                 100.3m            99.39m       -0.93%
+
+                  │ orig.results │            uexp.results            │
+                  │    ops/s     │    ops/s     vs base               │
+EtcdPut-4            14.89k ± 3%   14.85k ± 2%       ~ (p=0.447 n=10)
+EtcdSTM-4            2.993k ± 1%   3.006k ± 1%       ~ (p=0.342 n=10)
+Tile38QueryLoad-4    4.771k ± 1%   4.760k ± 1%       ~ (p=0.315 n=10)
+geomean              5.968k        5.967k       -0.02%
+
