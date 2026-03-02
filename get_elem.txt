@@ -1,0 +1,1462 @@
+    simd: add GetElem and SetElem
+
+diff --git a/src/cmd/compile/internal/arm64/simdssa.go b/src/cmd/compile/internal/arm64/simdssa.go
+index 345291bea4..bc00084ad4 100644
+--- a/src/cmd/compile/internal/arm64/simdssa.go
++++ b/src/cmd/compile/internal/arm64/simdssa.go
+@@ -12,6 +12,12 @@ import (
+ func ssaGenSIMDValue(s *ssagen.State, v *ssa.Value) bool {
+ 	var p *obj.Prog
+ 	switch v.Op {
++	case ssa.OpARM64VDUPDextr:
++		p = simdV11ScalarImmIn1(s, v, arm64.ARNG_D)
++
++	case ssa.OpARM64VDUPSextr:
++		p = simdV11ScalarImmIn1(s, v, arm64.ARNG_S)
++
+ 	case ssa.OpARM64VADD16B,
+ 		ssa.OpARM64VMUL16B:
+ 		p = simdV21(s, v, arm64.ARNG_16B)
+@@ -31,6 +37,36 @@ func ssaGenSIMDValue(s *ssagen.State, v *ssa.Value) bool {
+ 		ssa.OpARM64VMUL8H:
+ 		p = simdV21(s, v, arm64.ARNG_8H)
+ 
++	case ssa.OpARM64VMOVBextr:
++		p = simdVgpImmIn1(s, v, arm64.ARNG_B)
++
++	case ssa.OpARM64VMOVDextr:
++		p = simdVgpImmIn1(s, v, arm64.ARNG_D)
++
++	case ssa.OpARM64VMOVHextr:
++		p = simdVgpImmIn1(s, v, arm64.ARNG_H)
++
++	case ssa.OpARM64VMOVSextr:
++		p = simdVgpImmIn1(s, v, arm64.ARNG_S)
++
++	case ssa.OpARM64VMOVBins:
++		p = simdVgpvResultInArg0ImmOutIn0(s, v, arm64.ARNG_B)
++
++	case ssa.OpARM64VMOVDins:
++		p = simdVgpvResultInArg0ImmOutIn0(s, v, arm64.ARNG_D)
++
++	case ssa.OpARM64VMOVHins:
++		p = simdVgpvResultInArg0ImmOutIn0(s, v, arm64.ARNG_H)
++
++	case ssa.OpARM64VMOVSins:
++		p = simdVgpvResultInArg0ImmOutIn0(s, v, arm64.ARNG_S)
++
++	case ssa.OpARM64VMOVDins0:
++		p = simdVfpvResultInArg0ImmOutIn1(s, v, arm64.ARNG_D)
++
++	case ssa.OpARM64VMOVSins0:
++		p = simdVfpvResultInArg0ImmOutIn1(s, v, arm64.ARNG_S)
++
+ 	default:
+ 		// Unknown reg shape
+ 		return false
+diff --git a/src/cmd/compile/internal/arm64/ssa.go b/src/cmd/compile/internal/arm64/ssa.go
+index 0a2d53c5e4..9cd7a85e59 100644
+--- a/src/cmd/compile/internal/arm64/ssa.go
++++ b/src/cmd/compile/internal/arm64/ssa.go
+@@ -182,6 +182,22 @@ func simdRegArng(reg int16, arng int16) int16 {
+ 	return reg
+ }
+ 
++// simdRegElem encodes ssa value's reference to a vector register element
++func simdRegElem(reg int16, arng int16, idx int16) (res obj.Addr) {
++	if reg < arm64.REG_F0 || arm64.REG_F31 < reg {
++		base.Fatalf("expected fp register: r%d", reg)
++	}
++	elem, err := arm64.RegisterArrangement(reg, arng, true /*indexing*/)
++	if err != nil {
++		base.Fatalf("bad simd register indexing arrangement: %v", err)
++	}
++	res.Type = obj.TYPE_REG
++	res.Class = arm64.C_ELEM
++	res.Index = idx
++	res.Reg = elem
++	return
++}
++
+ // simdV11Asm generates element-wise unary vector operations with explicit asm, e.g. VMOV V1.16B, V0.16B
+ func simdV11Asm(s *ssagen.State, asm obj.As, src, dst int16, arrangement int16) *obj.Prog {
+ 	p := s.Prog(asm)
+@@ -223,6 +239,48 @@ func simdV21(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
+ 	return simdV21Asm(s, v.Op.Asm(), v.Args[0].Reg(), v.Args[1].Reg(), v.Reg(), arrangement)
+ }
+ 
++// simdVgpImmIn1 generates vector GetElem instruction VMOV V1.S[2], R0
++// The arrangement parameter specifies the vector element arrangement (e.g., S, D)
++func simdVgpImmIn1(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++	p := s.Prog(v.Op.Asm())
++	p.From = simdRegElem(v.Args[0].Reg(), arrangement, int16(v.AuxUInt8()))
++	p.To.Reg = v.Reg()
++	p.To.Type = obj.TYPE_REG
++	return p
++}
++
++// simdV11ScalarImmIn1 generates a SIMD instruction with indexed input and
++// scalar-in-vector-register output, e.g. VDUP V1.S[1], V0
++// The arrangement parameter specifies the source arrangement (e.g., S, D)
++func simdV11ScalarImmIn1(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++	p := s.Prog(v.Op.Asm())
++	p.From = simdRegElem(v.Args[0].Reg(), arrangement, int16(v.AuxUInt8()))
++	p.To.Type = obj.TYPE_REG
++	p.To.Reg = v.Reg() - arm64.REG_F0 + arm64.REG_V0
++	p.To.Class = arm64.C_VREG
++	return p
++}
++
++// simdVgpvResultInArg0ImmOutIn0 generates vector SetElem, e.g. VMOV R0, V1.S[2] (INS general instruction)
++// The arrangement parameter specifies the vector element arrangement (e.g., S, D)
++func simdVgpvResultInArg0ImmOutIn0(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++	p := s.Prog(v.Op.Asm())
++	p.To = simdRegElem(v.Reg(), arrangement, int16(v.AuxUInt8()))
++	p.From.Reg = v.Args[1].Reg()
++	p.From.Type = obj.TYPE_REG
++	return p
++}
++
++// simdVfpvResultInArg0ImmOutIn1 generates vector floating-point SetElem,
++// e.g. VMOV V2.4S[0], V1.4S[3] (INS element instruction)
++// The arrangement parameter specifies the vector element arrangement (e.g., S, D)
++func simdVfpvResultInArg0ImmOutIn1(s *ssagen.State, v *ssa.Value, arrangement int16) *obj.Prog {
++	p := s.Prog(v.Op.Asm())
++	p.To = simdRegElem(v.Reg(), arrangement, int16(v.AuxUInt8()))
++	p.From = simdRegElem(v.Args[1].Reg(), arrangement, 0)
++	return p
++}
++
+ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+ 	switch v.Op {
+ 	case ssa.OpCopy, ssa.OpARM64MOVDreg:
+diff --git a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+index befd647c89..3108321679 100644
+--- a/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/ARM64Ops.go
+@@ -178,6 +178,7 @@ func init() {
+ 		fp01           = regInfo{inputs: nil, outputs: []regMask{fp}}
+ 		fp11           = regInfo{inputs: []regMask{fp}, outputs: []regMask{fp}}
+ 		fpgp           = regInfo{inputs: []regMask{fp}, outputs: []regMask{gp}}
++		fpgpfp         = regInfo{inputs: []regMask{fp, gp}, outputs: []regMask{fp}}
+ 		gpfp           = regInfo{inputs: []regMask{gp}, outputs: []regMask{fp}}
+ 		fp21           = regInfo{inputs: []regMask{fp, fp}, outputs: []regMask{fp}}
+ 		fp31           = regInfo{inputs: []regMask{fp, fp, fp}, outputs: []regMask{fp}}
+@@ -828,7 +829,7 @@ func init() {
+ 		pkg:                "cmd/internal/obj/arm64",
+ 		genfile:            "../../arm64/ssa.go",
+ 		genSIMDfile:        "../../arm64/simdssa.go",
+-		ops:                append(ops, simdARM64Ops(fp21)...),
++		ops:                append(ops, simdARM64Ops(fp11, fp21, fpgp, fpgpfp, fp21)...),
+ 		blocks:             blocks,
+ 		regnames:           regNamesARM64,
+ 		ParamIntRegNames:   "R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15",
+diff --git a/src/cmd/compile/internal/ssa/_gen/simdARM64.rules b/src/cmd/compile/internal/ssa/_gen/simdARM64.rules
+index 88df884ece..b94026b4fe 100644
+--- a/src/cmd/compile/internal/ssa/_gen/simdARM64.rules
++++ b/src/cmd/compile/internal/ssa/_gen/simdARM64.rules
+@@ -10,6 +10,16 @@
+ (AddUint16x8 ...) => (VADD8H ...)
+ (AddUint32x4 ...) => (VADD4S ...)
+ (AddUint64x2 ...) => (VADD2D ...)
++(GetElemFloat32x4 ...) => (VDUPSextr ...)
++(GetElemFloat64x2 ...) => (VDUPDextr ...)
++(GetElemInt8x16 ...) => (VMOVBextr ...)
++(GetElemInt16x8 ...) => (VMOVHextr ...)
++(GetElemInt32x4 ...) => (VMOVSextr ...)
++(GetElemInt64x2 ...) => (VMOVDextr ...)
++(GetElemUint8x16 ...) => (VMOVBextr ...)
++(GetElemUint16x8 ...) => (VMOVHextr ...)
++(GetElemUint32x4 ...) => (VMOVSextr ...)
++(GetElemUint64x2 ...) => (VMOVDextr ...)
+ (MulFloat32x4 ...) => (VFMUL4S ...)
+ (MulFloat64x2 ...) => (VFMUL2D ...)
+ (MulInt8x16 ...) => (VMUL16B ...)
+@@ -18,3 +28,13 @@
+ (MulUint8x16 ...) => (VMUL16B ...)
+ (MulUint16x8 ...) => (VMUL8H ...)
+ (MulUint32x4 ...) => (VMUL4S ...)
++(SetElemFloat32x4 ...) => (VMOVSins0 ...)
++(SetElemFloat64x2 ...) => (VMOVDins0 ...)
++(SetElemInt8x16 ...) => (VMOVBins ...)
++(SetElemInt16x8 ...) => (VMOVHins ...)
++(SetElemInt32x4 ...) => (VMOVSins ...)
++(SetElemInt64x2 ...) => (VMOVDins ...)
++(SetElemUint8x16 ...) => (VMOVBins ...)
++(SetElemUint16x8 ...) => (VMOVHins ...)
++(SetElemUint32x4 ...) => (VMOVSins ...)
++(SetElemUint64x2 ...) => (VMOVDins ...)
+diff --git a/src/cmd/compile/internal/ssa/_gen/simdARM64ops.go b/src/cmd/compile/internal/ssa/_gen/simdARM64ops.go
+index d580c8da1d..2961212948 100644
+--- a/src/cmd/compile/internal/ssa/_gen/simdARM64ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/simdARM64ops.go
+@@ -2,7 +2,7 @@
+ 
+ package main
+ 
+-func simdARM64Ops(v21 regInfo) []opData {
++func simdARM64Ops(v11, v21, vgp, vgpv, vfpv regInfo) []opData {
+ 	return []opData{
+ 		{name: "VADD2D", argLength: 2, reg: v21, asm: "VADD", commutative: true, typ: "Vec128", resultInArg0: false},
+ 		{name: "VADD4S", argLength: 2, reg: v21, asm: "VADD", commutative: true, typ: "Vec128", resultInArg0: false},
+@@ -15,5 +15,17 @@ func simdARM64Ops(v21 regInfo) []opData {
+ 		{name: "VMUL4S", argLength: 2, reg: v21, asm: "VMUL", commutative: true, typ: "Vec128", resultInArg0: false},
+ 		{name: "VMUL8H", argLength: 2, reg: v21, asm: "VMUL", commutative: true, typ: "Vec128", resultInArg0: false},
+ 		{name: "VMUL16B", argLength: 2, reg: v21, asm: "VMUL", commutative: true, typ: "Vec128", resultInArg0: false},
++		{name: "VDUPDextr", argLength: 1, reg: v11, asm: "VDUP", aux: "UInt8", commutative: false, typ: "Vec128", resultInArg0: false},
++		{name: "VDUPSextr", argLength: 1, reg: v11, asm: "VDUP", aux: "UInt8", commutative: false, typ: "Vec128", resultInArg0: false},
++		{name: "VMOVBextr", argLength: 1, reg: vgp, asm: "VMOV", aux: "UInt8", commutative: false, typ: "int8", resultInArg0: false},
++		{name: "VMOVBins", argLength: 2, reg: vgpv, asm: "VMOV", aux: "UInt8", commutative: false, typ: "Vec128", resultInArg0: true},
++		{name: "VMOVDextr", argLength: 1, reg: vgp, asm: "VMOV", aux: "UInt8", commutative: false, typ: "int64", resultInArg0: false},
++		{name: "VMOVDins", argLength: 2, reg: vgpv, asm: "VMOV", aux: "UInt8", commutative: false, typ: "Vec128", resultInArg0: true},
++		{name: "VMOVDins0", argLength: 2, reg: vfpv, asm: "VMOV", aux: "UInt8", commutative: false, typ: "Vec128", resultInArg0: true},
++		{name: "VMOVHextr", argLength: 1, reg: vgp, asm: "VMOV", aux: "UInt8", commutative: false, typ: "int16", resultInArg0: false},
++		{name: "VMOVHins", argLength: 2, reg: vgpv, asm: "VMOV", aux: "UInt8", commutative: false, typ: "Vec128", resultInArg0: true},
++		{name: "VMOVSextr", argLength: 1, reg: vgp, asm: "VMOV", aux: "UInt8", commutative: false, typ: "int32", resultInArg0: false},
++		{name: "VMOVSins", argLength: 2, reg: vgpv, asm: "VMOV", aux: "UInt8", commutative: false, typ: "Vec128", resultInArg0: true},
++		{name: "VMOVSins0", argLength: 2, reg: vfpv, asm: "VMOV", aux: "UInt8", commutative: false, typ: "Vec128", resultInArg0: true},
+ 	}
+ }
+diff --git a/src/cmd/compile/internal/ssa/opGen.go b/src/cmd/compile/internal/ssa/opGen.go
+index efdab2a872..135ff97dc4 100644
+--- a/src/cmd/compile/internal/ssa/opGen.go
++++ b/src/cmd/compile/internal/ssa/opGen.go
+@@ -4496,6 +4496,18 @@ const (
+ 	OpARM64VMUL4S
+ 	OpARM64VMUL8H
+ 	OpARM64VMUL16B
++	OpARM64VDUPDextr
++	OpARM64VDUPSextr
++	OpARM64VMOVBextr
++	OpARM64VMOVBins
++	OpARM64VMOVDextr
++	OpARM64VMOVDins
++	OpARM64VMOVDins0
++	OpARM64VMOVHextr
++	OpARM64VMOVHins
++	OpARM64VMOVSextr
++	OpARM64VMOVSins
++	OpARM64VMOVSins0
+ 
+ 	OpLOONG64NEGV
+ 	OpLOONG64NEGF
+@@ -69862,6 +69874,186 @@ var opcodeTable = [...]opInfo{
+ 			},
+ 		},
+ 	},
++	{
++		name:    "VDUPDextr",
++		auxType: auxUInt8,
++		argLen:  1,
++		asm:     arm64.AVDUP,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++		},
++	},
++	{
++		name:    "VDUPSextr",
++		auxType: auxUInt8,
++		argLen:  1,
++		asm:     arm64.AVDUP,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++		},
++	},
++	{
++		name:    "VMOVBextr",
++		auxType: auxUInt8,
++		argLen:  1,
++		asm:     arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
++			},
++		},
++	},
++	{
++		name:         "VMOVBins",
++		auxType:      auxUInt8,
++		argLen:       2,
++		resultInArg0: true,
++		asm:          arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{1, 335544319},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++		},
++	},
++	{
++		name:    "VMOVDextr",
++		auxType: auxUInt8,
++		argLen:  1,
++		asm:     arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
++			},
++		},
++	},
++	{
++		name:         "VMOVDins",
++		auxType:      auxUInt8,
++		argLen:       2,
++		resultInArg0: true,
++		asm:          arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{1, 335544319},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++		},
++	},
++	{
++		name:         "VMOVDins0",
++		auxType:      auxUInt8,
++		argLen:       2,
++		resultInArg0: true,
++		asm:          arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++				{1, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++		},
++	},
++	{
++		name:    "VMOVHextr",
++		auxType: auxUInt8,
++		argLen:  1,
++		asm:     arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
++			},
++		},
++	},
++	{
++		name:         "VMOVHins",
++		auxType:      auxUInt8,
++		argLen:       2,
++		resultInArg0: true,
++		asm:          arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{1, 335544319},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++		},
++	},
++	{
++		name:    "VMOVSextr",
++		auxType: auxUInt8,
++		argLen:  1,
++		asm:     arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 335544319}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
++			},
++		},
++	},
++	{
++		name:         "VMOVSins",
++		auxType:      auxUInt8,
++		argLen:       2,
++		resultInArg0: true,
++		asm:          arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{1, 335544319},           // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R19 R20 R21 R22 R23 R24 R25 R26 R30
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++		},
++	},
++	{
++		name:         "VMOVSins0",
++		auxType:      auxUInt8,
++		argLen:       2,
++		resultInArg0: true,
++		asm:          arm64.AVMOV,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++				{1, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++			outputs: []outputInfo{
++				{0, 9223372034707292160}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
++			},
++		},
++	},
+ 
+ 	{
+ 		name:   "NEGV",
+diff --git a/src/cmd/compile/internal/ssa/rewriteARM64.go b/src/cmd/compile/internal/ssa/rewriteARM64.go
+index c7463ae986..66f0fc94c1 100644
+--- a/src/cmd/compile/internal/ssa/rewriteARM64.go
++++ b/src/cmd/compile/internal/ssa/rewriteARM64.go
+@@ -777,6 +777,36 @@ func rewriteValueARM64(v *Value) bool {
+ 	case OpGetClosurePtr:
+ 		v.Op = OpARM64LoweredGetClosurePtr
+ 		return true
++	case OpGetElemFloat32x4:
++		v.Op = OpARM64VDUPSextr
++		return true
++	case OpGetElemFloat64x2:
++		v.Op = OpARM64VDUPDextr
++		return true
++	case OpGetElemInt16x8:
++		v.Op = OpARM64VMOVHextr
++		return true
++	case OpGetElemInt32x4:
++		v.Op = OpARM64VMOVSextr
++		return true
++	case OpGetElemInt64x2:
++		v.Op = OpARM64VMOVDextr
++		return true
++	case OpGetElemInt8x16:
++		v.Op = OpARM64VMOVBextr
++		return true
++	case OpGetElemUint16x8:
++		v.Op = OpARM64VMOVHextr
++		return true
++	case OpGetElemUint32x4:
++		v.Op = OpARM64VMOVSextr
++		return true
++	case OpGetElemUint64x2:
++		v.Op = OpARM64VMOVDextr
++		return true
++	case OpGetElemUint8x16:
++		v.Op = OpARM64VMOVBextr
++		return true
+ 	case OpHmul32:
+ 		return rewriteValueARM64_OpHmul32(v)
+ 	case OpHmul32u:
+@@ -1111,6 +1141,36 @@ func rewriteValueARM64(v *Value) bool {
+ 		return rewriteValueARM64_OpSelect1(v)
+ 	case OpSelectN:
+ 		return rewriteValueARM64_OpSelectN(v)
++	case OpSetElemFloat32x4:
++		v.Op = OpARM64VMOVSins0
++		return true
++	case OpSetElemFloat64x2:
++		v.Op = OpARM64VMOVDins0
++		return true
++	case OpSetElemInt16x8:
++		v.Op = OpARM64VMOVHins
++		return true
++	case OpSetElemInt32x4:
++		v.Op = OpARM64VMOVSins
++		return true
++	case OpSetElemInt64x2:
++		v.Op = OpARM64VMOVDins
++		return true
++	case OpSetElemInt8x16:
++		v.Op = OpARM64VMOVBins
++		return true
++	case OpSetElemUint16x8:
++		v.Op = OpARM64VMOVHins
++		return true
++	case OpSetElemUint32x4:
++		v.Op = OpARM64VMOVSins
++		return true
++	case OpSetElemUint64x2:
++		v.Op = OpARM64VMOVDins
++		return true
++	case OpSetElemUint8x16:
++		v.Op = OpARM64VMOVBins
++		return true
+ 	case OpSignExt16to32:
+ 		v.Op = OpARM64MOVHreg
+ 		return true
+diff --git a/src/cmd/compile/internal/ssagen/intrinsics.go b/src/cmd/compile/internal/ssagen/intrinsics.go
+index f42d98d5de..00ddacba11 100644
+--- a/src/cmd/compile/internal/ssagen/intrinsics.go
++++ b/src/cmd/compile/internal/ssagen/intrinsics.go
+@@ -1942,7 +1942,7 @@ func opLen4_31(op ssa.Op, t *types.Type) func(s *state, n *ir.CallExpr, args []*
+ 	}
+ }
+ 
+-func immJumpTable(s *state, idx *ssa.Value, intrinsicCall *ir.CallExpr, genOp func(*state, int)) *ssa.Value {
++func immJumpTable(s *state, idx *ssa.Value, intrinsicCall *ir.CallExpr, immMax int, genOp func(*state, int)) *ssa.Value {
+ 	// Make blocks we'll need.
+ 	bEnd := s.f.NewBlock(ssa.BlockPlain)
+ 
+@@ -1950,6 +1950,10 @@ func immJumpTable(s *state, idx *ssa.Value, intrinsicCall *ir.CallExpr, genOp fu
+ 		panic("immJumpTable expects uint8 value")
+ 	}
+ 
++	if immMax > 256 {
++		panic("immJumpTable expects immMax <= 256")
++	}
++
+ 	// We will exhaust 0-255, so no need to check the bounds.
+ 	t := types.Types[types.TUINTPTR]
+ 	idx = s.conv(nil, idx, idx.Type, t)
+@@ -1963,7 +1967,7 @@ func immJumpTable(s *state, idx *ssa.Value, intrinsicCall *ir.CallExpr, genOp fu
+ 	}
+ 	b.SetControl(idx)
+ 	targets := [256]*ssa.Block{}
+-	for i := range 256 {
++	for i := range immMax {
+ 		t := s.f.NewBlock(ssa.BlockPlain)
+ 		targets[i] = t
+ 		b.AddEdgeTo(t)
+@@ -1971,6 +1975,9 @@ func immJumpTable(s *state, idx *ssa.Value, intrinsicCall *ir.CallExpr, genOp fu
+ 	s.endBlock()
+ 
+ 	for i, t := range targets {
++		if i >= immMax {
++			break
++		}
+ 		s.startBlock(t)
+ 		genOp(s, i)
+ 		if t.Kind != ssa.BlockExit {
+@@ -1984,48 +1991,60 @@ func immJumpTable(s *state, idx *ssa.Value, intrinsicCall *ir.CallExpr, genOp fu
+ 	return ret
+ }
+ 
+-func opLen1Imm8(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
++func opLen1Imm(op ssa.Op, t *types.Type, offset int, immMax int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 	return func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 		if args[1].Op == ssa.OpConst8 {
+ 			return s.newValue1I(op, t, args[1].AuxInt<<int64(offset), args[0])
+ 		}
+-		return immJumpTable(s, args[1], n, func(sNew *state, idx int) {
++		return immJumpTable(s, args[1], n, immMax, func(sNew *state, idx int) {
+ 			// Encode as int8 due to requirement of AuxInt, check its comment for details.
+ 			s.vars[n] = sNew.newValue1I(op, t, int64(int8(idx<<offset)), args[0])
+ 		})
+ 	}
+ }
+ 
+-func opLen2Imm8(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
++func opLen1Imm8(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
++	return opLen1Imm(op, t, offset, 255)
++}
++
++func opLen2Imm(op ssa.Op, t *types.Type, offset int, immMax int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 	return func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 		if args[1].Op == ssa.OpConst8 {
+ 			return s.newValue2I(op, t, args[1].AuxInt<<int64(offset), args[0], args[2])
+ 		}
+-		return immJumpTable(s, args[1], n, func(sNew *state, idx int) {
++		return immJumpTable(s, args[1], n, immMax, func(sNew *state, idx int) {
+ 			// Encode as int8 due to requirement of AuxInt, check its comment for details.
+ 			s.vars[n] = sNew.newValue2I(op, t, int64(int8(idx<<offset)), args[0], args[2])
+ 		})
+ 	}
+ }
+ 
+-func opLen3Imm8(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
++func opLen2Imm8(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
++	return opLen2Imm(op, t, offset, 255)
++}
++
++func opLen3Imm(op ssa.Op, t *types.Type, offset int, immMax int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 	return func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 		if args[1].Op == ssa.OpConst8 {
+ 			return s.newValue3I(op, t, args[1].AuxInt<<int64(offset), args[0], args[2], args[3])
+ 		}
+-		return immJumpTable(s, args[1], n, func(sNew *state, idx int) {
++		return immJumpTable(s, args[1], n, immMax, func(sNew *state, idx int) {
+ 			// Encode as int8 due to requirement of AuxInt, check its comment for details.
+ 			s.vars[n] = sNew.newValue3I(op, t, int64(int8(idx<<offset)), args[0], args[2], args[3])
+ 		})
+ 	}
+ }
+ 
++func opLen3Imm8(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
++	return opLen3Imm(op, t, offset, 255)
++}
++
+ func opLen2Imm8_2I(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 	return func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 		if args[2].Op == ssa.OpConst8 {
+ 			return s.newValue2I(op, t, args[2].AuxInt<<int64(offset), args[0], args[1])
+ 		}
+-		return immJumpTable(s, args[2], n, func(sNew *state, idx int) {
++		return immJumpTable(s, args[2], n, 255, func(sNew *state, idx int) {
+ 			// Encode as int8 due to requirement of AuxInt, check its comment for details.
+ 			s.vars[n] = sNew.newValue2I(op, t, int64(int8(idx<<offset)), args[0], args[1])
+ 		})
+@@ -2042,7 +2061,7 @@ func opLen2Imm8_II(op ssa.Op, t *types.Type, _ int) func(s *state, n *ir.CallExp
+ 		four := s.constInt64(types.Types[types.TUINT8], 4)
+ 		shifted := s.newValue2(ssa.OpLsh8x8, types.Types[types.TUINT8], args[2], four)
+ 		combined := s.newValue2(ssa.OpAdd8, types.Types[types.TUINT8], args[1], shifted)
+-		return immJumpTable(s, combined, n, func(sNew *state, idx int) {
++		return immJumpTable(s, combined, n, 255, func(sNew *state, idx int) {
+ 			// Encode as int8 due to requirement of AuxInt, check its comment for details.
+ 			// TODO for "zeroing" values, panic instead.
+ 			if idx & ^(3+3<<4) == 0 {
+@@ -2060,7 +2079,7 @@ func opLen2Imm8_SHA1RNDS4(op ssa.Op, t *types.Type, offset int) func(s *state, n
+ 		if args[1].Op == ssa.OpConst8 {
+ 			return s.newValue2I(op, t, (args[1].AuxInt<<int64(offset))&0b11, args[0], args[2])
+ 		}
+-		return immJumpTable(s, args[1], n, func(sNew *state, idx int) {
++		return immJumpTable(s, args[1], n, 255, func(sNew *state, idx int) {
+ 			// Encode as int8 due to requirement of AuxInt, check its comment for details.
+ 			s.vars[n] = sNew.newValue2I(op, t, int64(int8(idx<<offset))&0b11, args[0], args[2])
+ 		})
+@@ -2072,7 +2091,7 @@ func opLen3Imm8_2I(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.Ca
+ 		if args[2].Op == ssa.OpConst8 {
+ 			return s.newValue3I(op, t, args[2].AuxInt<<int64(offset), args[0], args[1], args[3])
+ 		}
+-		return immJumpTable(s, args[2], n, func(sNew *state, idx int) {
++		return immJumpTable(s, args[2], n, 255, func(sNew *state, idx int) {
+ 			// Encode as int8 due to requirement of AuxInt, check its comment for details.
+ 			s.vars[n] = sNew.newValue3I(op, t, int64(int8(idx<<offset)), args[0], args[1], args[3])
+ 		})
+@@ -2084,7 +2103,7 @@ func opLen4Imm8(op ssa.Op, t *types.Type, offset int) func(s *state, n *ir.CallE
+ 		if args[1].Op == ssa.OpConst8 {
+ 			return s.newValue4I(op, t, args[1].AuxInt<<int64(offset), args[0], args[2], args[3], args[4])
+ 		}
+-		return immJumpTable(s, args[1], n, func(sNew *state, idx int) {
++		return immJumpTable(s, args[1], n, 255, func(sNew *state, idx int) {
+ 			// Encode as int8 due to requirement of AuxInt, check its comment for details.
+ 			s.vars[n] = sNew.newValue4I(op, t, int64(int8(idx<<offset)), args[0], args[2], args[3], args[4])
+ 		})
+diff --git a/src/cmd/compile/internal/ssagen/simdARM64intrinsics.go b/src/cmd/compile/internal/ssagen/simdARM64intrinsics.go
+index 300cbbefc0..1467012af3 100644
+--- a/src/cmd/compile/internal/ssagen/simdARM64intrinsics.go
++++ b/src/cmd/compile/internal/ssagen/simdARM64intrinsics.go
+@@ -20,6 +20,16 @@ func simdARM64Intrinsics(addF func(pkg, fn string, b intrinsicBuilder, archFamil
+ 	addF(simdPackage, "Uint16x8.Add", opLen2(ssa.OpAddUint16x8, types.TypeVec128), sys.ARM64)
+ 	addF(simdPackage, "Uint32x4.Add", opLen2(ssa.OpAddUint32x4, types.TypeVec128), sys.ARM64)
+ 	addF(simdPackage, "Uint64x2.Add", opLen2(ssa.OpAddUint64x2, types.TypeVec128), sys.ARM64)
++	addF(simdPackage, "Float32x4.GetElem", opLen1Imm(ssa.OpGetElemFloat32x4, types.Types[types.TFLOAT32], 0, 3), sys.ARM64)
++	addF(simdPackage, "Float64x2.GetElem", opLen1Imm(ssa.OpGetElemFloat64x2, types.Types[types.TFLOAT64], 0, 1), sys.ARM64)
++	addF(simdPackage, "Int8x16.GetElem", opLen1Imm(ssa.OpGetElemInt8x16, types.Types[types.TINT8], 0, 15), sys.ARM64)
++	addF(simdPackage, "Int16x8.GetElem", opLen1Imm(ssa.OpGetElemInt16x8, types.Types[types.TINT16], 0, 7), sys.ARM64)
++	addF(simdPackage, "Int32x4.GetElem", opLen1Imm(ssa.OpGetElemInt32x4, types.Types[types.TINT32], 0, 3), sys.ARM64)
++	addF(simdPackage, "Int64x2.GetElem", opLen1Imm(ssa.OpGetElemInt64x2, types.Types[types.TINT64], 0, 1), sys.ARM64)
++	addF(simdPackage, "Uint8x16.GetElem", opLen1Imm(ssa.OpGetElemUint8x16, types.Types[types.TUINT8], 0, 15), sys.ARM64)
++	addF(simdPackage, "Uint16x8.GetElem", opLen1Imm(ssa.OpGetElemUint16x8, types.Types[types.TUINT16], 0, 7), sys.ARM64)
++	addF(simdPackage, "Uint32x4.GetElem", opLen1Imm(ssa.OpGetElemUint32x4, types.Types[types.TUINT32], 0, 3), sys.ARM64)
++	addF(simdPackage, "Uint64x2.GetElem", opLen1Imm(ssa.OpGetElemUint64x2, types.Types[types.TUINT64], 0, 1), sys.ARM64)
+ 	addF(simdPackage, "Float32x4.Mul", opLen2(ssa.OpMulFloat32x4, types.TypeVec128), sys.ARM64)
+ 	addF(simdPackage, "Float64x2.Mul", opLen2(ssa.OpMulFloat64x2, types.TypeVec128), sys.ARM64)
+ 	addF(simdPackage, "Int8x16.Mul", opLen2(ssa.OpMulInt8x16, types.TypeVec128), sys.ARM64)
+@@ -28,6 +38,16 @@ func simdARM64Intrinsics(addF func(pkg, fn string, b intrinsicBuilder, archFamil
+ 	addF(simdPackage, "Uint8x16.Mul", opLen2(ssa.OpMulUint8x16, types.TypeVec128), sys.ARM64)
+ 	addF(simdPackage, "Uint16x8.Mul", opLen2(ssa.OpMulUint16x8, types.TypeVec128), sys.ARM64)
+ 	addF(simdPackage, "Uint32x4.Mul", opLen2(ssa.OpMulUint32x4, types.TypeVec128), sys.ARM64)
++	addF(simdPackage, "Int8x16.SetElem", opLen2Imm(ssa.OpSetElemInt8x16, types.TypeVec128, 0, 15), sys.ARM64)
++	addF(simdPackage, "Int16x8.SetElem", opLen2Imm(ssa.OpSetElemInt16x8, types.TypeVec128, 0, 7), sys.ARM64)
++	addF(simdPackage, "Int32x4.SetElem", opLen2Imm(ssa.OpSetElemInt32x4, types.TypeVec128, 0, 3), sys.ARM64)
++	addF(simdPackage, "Int64x2.SetElem", opLen2Imm(ssa.OpSetElemInt64x2, types.TypeVec128, 0, 1), sys.ARM64)
++	addF(simdPackage, "Uint8x16.SetElem", opLen2Imm(ssa.OpSetElemUint8x16, types.TypeVec128, 0, 15), sys.ARM64)
++	addF(simdPackage, "Uint16x8.SetElem", opLen2Imm(ssa.OpSetElemUint16x8, types.TypeVec128, 0, 7), sys.ARM64)
++	addF(simdPackage, "Uint32x4.SetElem", opLen2Imm(ssa.OpSetElemUint32x4, types.TypeVec128, 0, 3), sys.ARM64)
++	addF(simdPackage, "Uint64x2.SetElem", opLen2Imm(ssa.OpSetElemUint64x2, types.TypeVec128, 0, 1), sys.ARM64)
++	addF(simdPackage, "Float32x4.SetElem", opLen2Imm(ssa.OpSetElemFloat32x4, types.TypeVec128, 0, 3), sys.ARM64)
++	addF(simdPackage, "Float64x2.SetElem", opLen2Imm(ssa.OpSetElemFloat64x2, types.TypeVec128, 0, 1), sys.ARM64)
+ 	addF(simdPackage, "Float32x4.AsFloat64x2", func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value { return args[0] }, sys.ARM64)
+ 	addF(simdPackage, "Float32x4.AsInt8x16", func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value { return args[0] }, sys.ARM64)
+ 	addF(simdPackage, "Float32x4.AsInt16x8", func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value { return args[0] }, sys.ARM64)
+diff --git a/src/simd/archsimd/_gen/simdgen/arch.go b/src/simd/archsimd/_gen/simdgen/arch.go
+index 166a1bddc3..81962859f3 100644
+--- a/src/simd/archsimd/_gen/simdgen/arch.go
++++ b/src/simd/archsimd/_gen/simdgen/arch.go
+@@ -61,7 +61,12 @@ var amd64RegInfoKeys = []string{
+ }
+ 
+ var arm64RegInfoKeys = []string{
++	"v11",
++	"v11ScalarImmIn1",
+ 	"v21",
++	"vgpImmIn1",
++	"vgpvResultInArg0ImmOutIn0",
++	"vfpvResultInArg0ImmOutIn1",
+ }
+ 
+ var amd64RegInfoSet = map[string]bool{
+@@ -72,7 +77,11 @@ var amd64RegInfoSet = map[string]bool{
+ }
+ 
+ var arm64RegInfoSet = map[string]bool{
+-	"v21": true,
++	"v11":  true,
++	"v21":  true,
++	"vgp": true,
++	"vgpv": true,
++	"vfpv": true,
+ }
+ 
+ // arm64Arrangements contains the SIMD arrangement suffixes for ARM64 NEON.
+@@ -83,7 +92,7 @@ var arm64Arrangements = []string{
+ 
+ const amd64RegInfoParams = "v11, v21, v2k, vkv, v2kv, v2kk, v31, v3kv, vgpv, vgp, vfpv, vfpkv, w11, w21, w2k, wkw, w2kw, w2kk, w31, w3kw, wgpw, wgp, wfpw, wfpkw, wkwload, v21load, v31load, v11load, w21load, w31load, w2kload, w2kwload, w11load, w3kwload, w2kkload, v31x0AtIn2 regInfo"
+ 
+-const arm64RegInfoParams = "v21 regInfo"
++const arm64RegInfoParams = "v11, v21, vgp, vgpv, vfpv regInfo"
+ 
+ const amd64GeneratedHeader = `// Code generated by 'simdgen -o godefs -goroot $GOROOT -xedPath $XED_PATH go.yaml types.yaml categories.yaml'; DO NOT EDIT.
+ `
+diff --git a/src/simd/archsimd/_gen/simdgen/arm64/operands.go b/src/simd/archsimd/_gen/simdgen/arm64/operands.go
+index c827710779..845fe8afda 100644
+--- a/src/simd/archsimd/_gen/simdgen/arm64/operands.go
++++ b/src/simd/archsimd/_gen/simdgen/arm64/operands.go
+@@ -118,6 +118,9 @@ func (op *Operand) Instantiate(arrangement Arrangement, ashape ArngShape, vregPo
+ 				op.Bits = 32
+ 			}
+ 		}
++		if mnemonic == "INS" {
++			op.Bits = arrangement.elemBits
++		}
+ 	case OperandVElem, OperandList:
+ 		panic("expected this operand type to be early-lowered")
+ 	}
+diff --git a/src/simd/archsimd/_gen/simdgen/arm64/ops/Moves/categories.yaml b/src/simd/archsimd/_gen/simdgen/arm64/ops/Moves/categories.yaml
+new file mode 100644
+index 0000000000..0395e69928
+--- /dev/null
++++ b/src/simd/archsimd/_gen/simdgen/arm64/ops/Moves/categories.yaml
+@@ -0,0 +1,11 @@
++!sum
++
++- go: GetElem
++  commutative: false
++  documentation: !string |-
++    // NAME retrieves a single constant-indexed element's value.
++
++- go: SetElem
++  commutative: false
++  documentation: !string |-
++    // NAME sets a single constant-indexed element's value.
+diff --git a/src/simd/archsimd/_gen/simdgen/arm64/ops/Moves/go.yaml b/src/simd/archsimd/_gen/simdgen/arm64/ops/Moves/go.yaml
+new file mode 100644
+index 0000000000..29dd87645e
+--- /dev/null
++++ b/src/simd/archsimd/_gen/simdgen/arm64/ops/Moves/go.yaml
+@@ -0,0 +1,72 @@
++!sum
++
++# GetElem VMOV (UMOV, integer)
++- go: GetElem
++  asm: "VMOV"
++  SSAVariant: "extr"
++  in:
++  - &imm
++    class: immediate
++    go: Immediate
++  - &vector
++    go: $t
++    base: int|uint
++  out:
++  - &scalar
++    class: greg
++
++# GetElem VDUP (duplicate element into scalar float in vreg)
++- go: GetElem
++  asm: "VDUP"
++  SSAVariant: "extr"
++  in:
++  - &imm
++    class: immediate
++    go: Immediate
++  - &vector
++    go: $t
++    base: float
++  out:
++  - &scalar
++    class: vreg
++    treatLikeAScalarOfSize: 0
++    OverwriteClass: greg
++    OverwriteBase: float
++
++# SetElem VMOV (INS, integer)
++- go: SetElem
++  asm: "VMOV"
++  SSAVariant: "ins"
++  in:
++  - &imm
++    class: immediate
++    go: Immediate
++  - &vector
++    go: $t
++    base: int|uint
++  - &scalar
++    class: greg
++  out:
++  - *vector
++
++# SetElem VMOV (float: INS from the lane 0 of the source)
++- go: SetElem
++  asm: "VMOV"
++  SSAVariant: "ins0"
++  in:
++  - &imm
++    class: immediate
++    go: Immediate
++  - &imm0
++    class: immediate
++    go: Immediate
++    const: 0 # imm+vreg with treatLikeAScalarOfSize are treated as scalar in lane 0
++  - &vector
++    go: $t
++    base: float
++  - &scalar
++    class: vreg
++    treatLikeAScalarOfSize: 0
++  out:
++  - *vector
++
+diff --git a/src/simd/archsimd/_gen/simdgen/gen_simdGenericOps.go b/src/simd/archsimd/_gen/simdgen/gen_simdGenericOps.go
+index 97a1b4882b..22fdb82b91 100644
+--- a/src/simd/archsimd/_gen/simdgen/gen_simdGenericOps.go
++++ b/src/simd/archsimd/_gen/simdgen/gen_simdGenericOps.go
+@@ -49,9 +49,9 @@ func writeSIMDGenericOps(ops []Operation) *bytes.Buffer {
+ 		if op.SkipMaskedMethod() {
+ 			continue
+ 		}
+-		_, _, _, immType, gOp := op.shape()
++		_, _, _, immType, gOp, _ := op.shape()
+ 		gOpData := genericOpsData{gOp.GenericName(), len(gOp.In), op.Commutative}
+-		if immType == VarImm || immType == ConstVarImm {
++		if immType == VarImm || immType == VarImmLim || immType == ConstVarImm {
+ 			opsData.OpsImm = append(opsData.OpsImm, gOpData)
+ 		} else {
+ 			opsData.Ops = append(opsData.Ops, gOpData)
+diff --git a/src/simd/archsimd/_gen/simdgen/gen_simdIntrinsics.go b/src/simd/archsimd/_gen/simdgen/gen_simdIntrinsics.go
+index 4e0ce87042..37e50de9bf 100644
+--- a/src/simd/archsimd/_gen/simdgen/gen_simdIntrinsics.go
++++ b/src/simd/archsimd/_gen/simdgen/gen_simdIntrinsics.go
+@@ -49,8 +49,14 @@ func simd{{.ArchUpper}}Intrinsics(addF func(pkg, fn string, b intrinsicBuilder,
+ {{end}}
+ {{define "op4_31"}}	addF(simdPackage, "{{(index .In 2).Go}}.{{.Go}}", opLen4_31(ssa.Op{{.GenericName}}, {{.SSAType}}), {{GetSysArch}})
+ {{end}}
++{{define "op1Imm"}}	addF(simdPackage, "{{(index .In 1).Go}}.{{.Go}}", opLen1Imm(ssa.Op{{.GenericName}}, {{.SSAType}}, {{(index .In 0).ImmOffset}}, {{(index .In 0).ImmMax}}), {{GetSysArch}})
++{{end}}
+ {{define "op1Imm8"}}	addF(simdPackage, "{{(index .In 1).Go}}.{{.Go}}", opLen1Imm8(ssa.Op{{.GenericName}}, {{.SSAType}}, {{(index .In 0).ImmOffset}}), {{GetSysArch}})
+ {{end}}
++{{define "op2Imm"}}	addF(simdPackage, "{{(index .In 1).Go}}.{{.Go}}", opLen2Imm(ssa.Op{{.GenericName}}, {{.SSAType}}, {{(index .In 0).ImmOffset}}, {{(index .In 0).ImmMax}}), {{GetSysArch}})
++{{end}}
++{{define "op2ImmVecAsScalar"}} addF(simdPackage, "{{(index .In 2).Go}}.{{.Go}}", opLen2Imm(ssa.Op{{.GenericName}}, {{.SSAType}}, {{(index .In 0).ImmOffset}}, {{(index .In 0).ImmMax}}), {{GetSysArch}})
++{{end}}
+ {{define "op2Imm8"}}	addF(simdPackage, "{{(index .In 1).Go}}.{{.Go}}", opLen2Imm8(ssa.Op{{.GenericName}}, {{.SSAType}}, {{(index .In 0).ImmOffset}}), {{GetSysArch}})
+ {{end}}
+ {{define "op2Imm8_2I"}}	addF(simdPackage, "{{(index .In 1).Go}}.{{.Go}}", opLen2Imm8_2I(ssa.Op{{.GenericName}}, {{.SSAType}}, {{(index .In 0).ImmOffset}}), {{GetSysArch}})
+@@ -127,6 +133,17 @@ func writeSIMDIntrinsics(ops []Operation, typeMap simdTypeMap) *bytes.Buffer {
+ 			continue
+ 		}
+ 		if s, op, err := classifyOp(op); err == nil {
++
++			if s == "op2Imm" {
++				idxVecAsScalar, err := checkVecAsScalar(op)
++				if err != nil {
++					panic(err)
++				}
++				if idxVecAsScalar >= 0 {
++					s += "VecAsScalar"
++				}
++			}
++
+ 			if err := t.ExecuteTemplate(buffer, s, op); err != nil {
+ 				panic(fmt.Errorf("failed to execute template %s for op %s: %w", s, op.Go, err))
+ 			}
+diff --git a/src/simd/archsimd/_gen/simdgen/gen_simdMachineOps.go b/src/simd/archsimd/_gen/simdgen/gen_simdMachineOps.go
+index fe2fd05615..152cb2bdb7 100644
+--- a/src/simd/archsimd/_gen/simdgen/gen_simdMachineOps.go
++++ b/src/simd/archsimd/_gen/simdgen/gen_simdMachineOps.go
+@@ -89,7 +89,7 @@ func writeSIMDMachineOps(ops []Operation) *bytes.Buffer {
+ 		return a
+ 	}
+ 	for _, op := range ops {
+-		_, _, maskType, _, gOp := op.shape()
++		_, _, maskType, _, gOp, _ := op.shape()
+ 		asm := machineOpName(maskType, gOp)
+ 		other, ok := best[asm]
+ 		if !ok {
+@@ -111,7 +111,7 @@ func writeSIMDMachineOps(ops []Operation) *bytes.Buffer {
+ 	regInfoMissing := make(map[string]bool, 0)
+ 	for _, asm := range mOpOrder {
+ 		op := best[asm]
+-		shapeIn, shapeOut, maskType, _, gOp := op.shape()
++		shapeIn, shapeOut, maskType, _, gOp, _ := op.shape()
+ 
+ 		// TODO: all our masked operations are now zeroing, we need to generate machine ops with merging masks, maybe copy
+ 		// one here with a name suffix "Merging". The rewrite rules will need them.
+@@ -145,7 +145,7 @@ func writeSIMDMachineOps(ops []Operation) *bytes.Buffer {
+ 			panic(err)
+ 		}
+ 		var outType string
+-		if shapeOut == OneVregOut || shapeOut == OneVregOutAtIn || gOp.Out[0].OverwriteClass != nil {
++		if shapeOut == OneVregOut || shapeOut == OneVregOutAtIn || shapeOut == OneVregOutScalar || gOp.Out[0].OverwriteClass != nil {
+ 			// If class overwrite is happening, that's not really a mask but a vreg.
+ 			outType = fmt.Sprintf("Vec%d", *gOp.Out[0].Bits)
+ 		} else if shapeOut == OneGregOut {
+diff --git a/src/simd/archsimd/_gen/simdgen/gen_simdTypes.go b/src/simd/archsimd/_gen/simdgen/gen_simdTypes.go
+index 30723a2a1e..d2cbced292 100644
+--- a/src/simd/archsimd/_gen/simdgen/gen_simdTypes.go
++++ b/src/simd/archsimd/_gen/simdgen/gen_simdTypes.go
+@@ -340,6 +340,14 @@ func ({{.Op1NameAndType "x"}}) {{.Go}}({{.Op2NameAndType "y"}}, {{.Op0NameAndTyp
+ func ({{.Op0NameAndType "x"}}) {{.Go}}(y uint{{(index .In 1).TreatLikeAScalarOfSize}}) {{(index .Out 0).Go}}
+ {{end}}
+ 
++{{define "op2ImmVecAsScalar"}}
++{{if .Documentation}}{{.Documentation}}
++//{{end}}
++// {{.ImmName}} results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++// Asm: {{.Asm}}, CPU Feature: {{.CPUFeature}}
++func ({{.Op2NameAndType "x"}}) {{.Go}}({{.ImmName}} uint8, v float{{(index .In 3).ElemBits}}) {{(index .Out 0).Go}}
++{{end}}
++
+ {{define "op3VecAsScalar"}}
+ {{if .Documentation}}{{.Documentation}}
+ //{{end}}
+@@ -377,6 +385,8 @@ func ({{.Op2NameAndType "x"}}) {{.Go}}({{.Op1NameAndType "y"}}, {{.Op0NameAndTyp
+ func ({{.Op1NameAndType "x"}}) {{.Go}}({{.ImmName}} uint8) {{.GoType}}
+ {{end}}
+ 
++{{define "op1Imm"}}{{template "op1Imm8" .}}{{end}}
++
+ {{define "op2Imm8"}}
+ {{if .Documentation}}{{.Documentation}}
+ //{{end}}
+@@ -386,6 +396,8 @@ func ({{.Op1NameAndType "x"}}) {{.Go}}({{.ImmName}} uint8) {{.GoType}}
+ func ({{.Op1NameAndType "x"}}) {{.Go}}({{.ImmName}} uint8, {{.Op2NameAndType "y"}}) {{.GoType}}
+ {{end}}
+ 
++{{define "op2Imm"}}{{template "op2Imm8" .}}{{end}}
++
+ {{define "op2Imm8_2I"}}
+ {{if .Documentation}}{{.Documentation}}
+ //{{end}}
+@@ -743,10 +755,10 @@ func writeSIMDStubs(ops []Operation, typeMap simdTypeMap) (f, fI *bytes.Buffer)
+ 		}
+ 		if s, op, err := classifyOp(op); err == nil {
+ 			if idxVecAsScalar != -1 {
+-				if s == "op2" || s == "op3" {
++				if s == "op2" || s == "op3" || s == "op2Imm" {
+ 					s += "VecAsScalar"
+ 				} else {
+-					panic(fmt.Errorf("simdgen only supports op2 or op3 with TreatLikeAScalarOfSize"))
++					panic(fmt.Errorf("simdgen only supports op2, op2Imm or op3, not %s with TreatLikeAScalarOfSize", s))
+ 				}
+ 			}
+ 			if i == 0 || op.Go != ops[i-1].Go {
+diff --git a/src/simd/archsimd/_gen/simdgen/gen_simdrules.go b/src/simd/archsimd/_gen/simdgen/gen_simdrules.go
+index 3944c0d8bb..8e3821f3b1 100644
+--- a/src/simd/archsimd/_gen/simdgen/gen_simdrules.go
++++ b/src/simd/archsimd/_gen/simdgen/gen_simdrules.go
+@@ -136,7 +136,7 @@ func writeSIMDRules(ops []Operation) *bytes.Buffer {
+ 	memOpSeen := make(map[string]bool)
+ 
+ 	for _, opr := range ops {
+-		opInShape, opOutShape, maskType, immType, gOp := opr.shape()
++		opInShape, opOutShape, maskType, immType, gOp, _ := opr.shape()
+ 		asm := machineOpName(maskType, gOp)
+ 		vregInCnt := len(gOp.In)
+ 		if maskType == OneMask {
+@@ -182,7 +182,7 @@ func writeSIMDRules(ops []Operation) *bytes.Buffer {
+ 		}
+ 		var tplName string
+ 		// If class overwrite is happening, that's not really a mask but a vreg.
+-		if opOutShape == OneVregOut || opOutShape == OneVregOutAtIn || gOp.Out[0].OverwriteClass != nil {
++		if opOutShape == OneVregOut || opOutShape == OneVregOutAtIn || opOutShape == OneVregOutScalar || gOp.Out[0].OverwriteClass != nil {
+ 			switch opInShape {
+ 			case OneImmIn:
+ 				tplName = "pureVreg"
+diff --git a/src/simd/archsimd/_gen/simdgen/gen_simdssa.go b/src/simd/archsimd/_gen/simdgen/gen_simdssa.go
+index 5aaf9dd261..517c440b57 100644
+--- a/src/simd/archsimd/_gen/simdgen/gen_simdssa.go
++++ b/src/simd/archsimd/_gen/simdgen/gen_simdssa.go
+@@ -91,7 +91,7 @@ func writeSIMDSSA(ops []Operation) *bytes.Buffer {
+ 	seen := map[string]struct{}{}
+ 	allUnseen := make(map[string][]Operation)
+ 	allUnseenCaseStr := make(map[string][]string)
+-	classifyOp := func(op Operation, maskType maskShape, shapeIn inShape, shapeOut outShape, caseStr string, mem memShape) error {
++	classifyOp := func(op Operation, maskType maskShape, shapeIn inShape, shapeOut outShape, caseStr string, mem memShape, immOpArg string) error {
+ 		regShape, err := op.regShape(mem)
+ 		if err != nil {
+ 			return err
+@@ -101,9 +101,16 @@ func writeSIMDSSA(ops []Operation) *bytes.Buffer {
+ 		}
+ 		if shapeOut == OneVregOutAtIn {
+ 			regShape += "ResultInArg0"
++		} else if shapeOut == OneVregOutScalar {
++			regShape += "Scalar"
+ 		}
+ 		if shapeIn == OneImmIn || shapeIn == OneKmaskImmIn {
+-			regShape += "Imm8"
++			if immOpArg != "" {
++				regShape += "Imm"
++				regShape += immOpArg
++			} else {
++				regShape += "Imm8"
++			}
+ 		}
+ 		regShape, err = rewriteVecAsScalarRegInfo(op, regShape)
+ 		if err != nil {
+@@ -139,7 +146,7 @@ func writeSIMDSSA(ops []Operation) *bytes.Buffer {
+ 		return nil
+ 	}
+ 	for _, op := range ops {
+-		shapeIn, shapeOut, maskType, _, gOp := op.shape()
++		shapeIn, shapeOut, maskType, _, gOp, immOpArg := op.shape()
+ 		asm := machineOpName(maskType, gOp)
+ 		if _, ok := seen[asm]; ok {
+ 			continue
+@@ -153,7 +160,7 @@ func writeSIMDSSA(ops []Operation) *bytes.Buffer {
+ 				isZeroMasking = true
+ 			}
+ 		}
+-		if err := classifyOp(op, maskType, shapeIn, shapeOut, caseStr, NoMem); err != nil {
++		if err := classifyOp(op, maskType, shapeIn, shapeOut, caseStr, NoMem, immOpArg); err != nil {
+ 			panic(err)
+ 		}
+ 		if op.MemFeatures != nil && *op.MemFeatures == "vbcst" {
+@@ -162,7 +169,7 @@ func writeSIMDSSA(ops []Operation) *bytes.Buffer {
+ 			// Ignore the error
+ 			// an error could be triggered by [checkVecAsScalar].
+ 			// TODO: make [checkVecAsScalar] aware of mem ops.
+-			if err := classifyOp(op, maskType, shapeIn, shapeOut, caseStr+"load", VregMemIn); err != nil {
++			if err := classifyOp(op, maskType, shapeIn, shapeOut, caseStr+"load", VregMemIn, immOpArg); err != nil {
+ 				if *Verbose {
+ 					log.Printf("Seen error: %e", err)
+ 				}
+diff --git a/src/simd/archsimd/_gen/simdgen/gen_utility.go b/src/simd/archsimd/_gen/simdgen/gen_utility.go
+index 60d5900608..655b5706bd 100644
+--- a/src/simd/archsimd/_gen/simdgen/gen_utility.go
++++ b/src/simd/archsimd/_gen/simdgen/gen_utility.go
+@@ -91,12 +91,13 @@ const (
+ )
+ 
+ const (
+-	InvalidOut     outShape = iota
+-	NoOut                   // no output
+-	OneVregOut              // (one) vector register output
+-	OneGregOut              // (one) general register output
+-	OneKmaskOut             // mask output
+-	OneVregOutAtIn          // the first input is also the output
++	InvalidOut       outShape = iota
++	NoOut                     // no output
++	OneVregOut                // (one) vector register output
++	OneGregOut                // (one) general register output
++	OneKmaskOut               // mask output
++	OneVregOutAtIn            // the first input is also the output
++	OneVregOutScalar          // (one) vector register output scalar in lane 0, other lanes zeroed
+ )
+ 
+ const (
+@@ -112,6 +113,7 @@ const (
+ 	ConstImm             // const only immediate
+ 	VarImm               // pure imm argument provided by the users
+ 	ConstVarImm          // a combination of user arg and const
++	VarImmLim            // pure imm argument provided by the users, up to maximum in op.ImmMax
+ )
+ 
+ const (
+@@ -127,7 +129,7 @@ const (
+ //
+ // This function does not modify op.
+ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskShape, immType immShape,
+-	opNoImm Operation) {
++	opNoImm Operation, immOpIdx string) {
+ 	if len(op.Out) > 1 {
+ 		panic(fmt.Errorf("simdgen only supports 1 output: %s", op))
+ 	}
+@@ -136,8 +138,14 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+ 		outputReg = op.Out[0].AsmPos
+ 		if op.Out[0].Class == "vreg" {
+ 			shapeOut = OneVregOut
++			if op.Out[0].TreatLikeAScalarOfSize != nil {
++				shapeOut = OneVregOutScalar
++			}
+ 		} else if op.Out[0].Class == "greg" {
+ 			shapeOut = OneGregOut
++			if op.Out[0].TreatLikeAScalarOfSize != nil {
++				shapeOut = OneVregOutScalar
++			}
+ 		} else if op.Out[0].Class == "mask" {
+ 			shapeOut = OneKmaskOut
+ 		} else {
+@@ -150,13 +158,14 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+ 		panic(fmt.Errorf("simdgen only supports 1 output: %s", op))
+ 	}
+ 	hasImm := false
++	immAsmPos := -1
+ 	maskCount := 0
+ 	hasVreg := false
+ 	for _, in := range op.In {
+ 		if in.AsmPos == outputReg {
+ 			if shapeOut != OneVregOutAtIn && in.AsmPos == 0 && in.Class == "vreg" {
+ 				shapeOut = OneVregOutAtIn
+-			} else {
++			} else if in.Class != "immediate" { // on arm64 immediate may be indexing into output register, e.g. INS greg, vreg[1]
+ 				panic(fmt.Errorf("simdgen only supports output and input sharing the same position case of \"the first input is vreg and the only output\": %s", op))
+ 			}
+ 		}
+@@ -167,9 +176,16 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+ 				panic(fmt.Errorf("simdgen only supports immediates of 8 bits: %s", op))
+ 			}
+ 			hasImm = true
++			immAsmPos = in.AsmPos
++			if immAsmPos == outputReg {
++				immOpIdx += "Out"
++			}
+ 		} else if in.Class == "mask" {
+ 			maskCount++
+ 		} else {
++			if immAsmPos == in.AsmPos {
++				immOpIdx += fmt.Sprintf("In%d", in.AsmPos)
++			}
+ 			hasVreg = true
+ 		}
+ 	}
+@@ -177,6 +193,9 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+ 
+ 	removeImm := func(o *Operation) {
+ 		o.In = o.In[1:]
++		if o.In[0].Class == "immediate" {
++			o.In = o.In[1:] // e.g. arm64 INS Vn[0], Vd[imm]
++		}
+ 	}
+ 	if hasImm {
+ 		removeImm(&opNoImm)
+@@ -187,7 +206,11 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+ 				immType = ConstImm
+ 			}
+ 		} else if op.In[0].ImmOffset != nil {
+-			immType = VarImm
++			if op.In[0].ImmMax != nil {
++				immType = VarImmLim
++			} else {
++				immType = VarImm
++			}
+ 		} else {
+ 			panic(fmt.Errorf("simdgen requires imm to have at least one of ImmOffset or Const set: %s", op))
+ 		}
+@@ -235,7 +258,7 @@ func (op *Operation) shape() (shapeIn inShape, shapeOut outShape, maskType maskS
+ 
+ // regShape returns a string representation of the register shape.
+ func (op *Operation) regShape(mem memShape) (string, error) {
+-	_, _, _, _, gOp := op.shape()
++	_, _, _, _, gOp, _ := op.shape()
+ 	var regInfo, fixedName string
+ 	var vRegInCnt, gRegInCnt, kMaskInCnt, vRegOutCnt, gRegOutCnt, kMaskOutCnt, memInCnt, memOutCnt int
+ 	for i, in := range gOp.In {
+@@ -481,7 +504,7 @@ func (op Operation) Op4NameAndType(s string) string {
+ 	return op.In[4].OpNameAndType(s)
+ }
+ 
+-var immClasses []string = []string{"BAD0Imm", "BAD1Imm", "op1Imm8", "op2Imm8", "op3Imm8", "op4Imm8"}
++var immClasses []string = []string{"BAD0Imm", "BAD1Imm", "op1Imm", "op2Imm", "op3Imm", "op4Imm"}
+ var classes []string = []string{"BAD0", "op1", "op2", "op3", "op4"}
+ 
+ // classifyOp returns a classification string, modified operation, and perhaps error based
+@@ -491,16 +514,24 @@ var classes []string = []string{"BAD0", "op1", "op2", "op3", "op4"}
+ // The classification string is used to select a template or a clause of a template
+ // for intrinsics declaration and the ssagen intrinisics glue code in the compiler.
+ func classifyOp(op Operation) (string, Operation, error) {
+-	_, _, _, immType, gOp := op.shape()
++	_, _, _, immType, gOp, _ := op.shape()
+ 
+ 	var class string
+ 
+-	if immType == VarImm || immType == ConstVarImm {
++	if immType == VarImm || immType == VarImmLim || immType == ConstVarImm {
+ 		switch l := len(op.In); l {
+ 		case 1:
+ 			return "", op, fmt.Errorf("simdgen does not recognize this operation of only immediate input: %s", op)
+ 		case 2, 3, 4, 5:
+-			class = immClasses[l]
++			if immType == VarImmLim {
++				if len(op.In)-len(gOp.In) == 2 {
++					class = immClasses[l-1] // arm64: do not account const 0 imm in INS Vn[0], Vd[imm]
++				} else {
++					class = immClasses[l] // known immediate maximum value
++				}
++			} else {
++				class = immClasses[l] + "8" // default: imm up to 256
++			}
+ 		default:
+ 			return "", op, fmt.Errorf("simdgen does not recognize this operation of input length %d: %s", len(op.In), op)
+ 		}
+@@ -530,6 +561,9 @@ func checkVecAsScalar(op Operation) (idx int, err error) {
+ 			if idx == -1 {
+ 				idx = i
+ 				sSize = *o.TreatLikeAScalarOfSize
++				if sSize == 0 && CurrentArch().Arch == "arm64" {
++					sSize = *o.ElemBits // treating lane 0 as element-sized fp scalar, e.g. INS Vn[0], Vd[imm]
++				}
+ 			} else {
+ 				err = fmt.Errorf("simdgen only supports one TreatLikeAScalarOfSize in the arg list: %s", op)
+ 				return
+@@ -559,6 +593,8 @@ func rewriteVecAsScalarRegInfo(op Operation, regInfo string) (string, error) {
+ 			regInfo = "v2fpv"
+ 		} else if regInfo == "v3kv" {
+ 			regInfo = "v2fpkv"
++		} else if regInfo == "v21ResultInArg0ImmOutIn1" {
++			regInfo = "vfpvResultInArg0ImmOutIn1"
+ 		} else {
+ 			return "", fmt.Errorf("simdgen does not recognize uses of treatLikeAScalarOfSize with op regShape %s in op: %s", regInfo, op)
+ 		}
+@@ -611,6 +647,9 @@ func (op Operation) GenericName() string {
+ 		}
+ 	}
+ 	if op.In[0].Class == "immediate" {
++		if op.In[1].Class == "immediate" {
++			return op.Go + *op.In[2].Go // e.g. arm64 INS Vn[0], Vd[imm]
++		}
+ 		return op.Go + *op.In[1].Go
+ 	}
+ 	return op.Go + *op.In[0].Go
+@@ -623,7 +662,7 @@ func (op Operation) GenericName() string {
+ func dedupGodef(ops []Operation) ([]Operation, error) {
+ 	seen := map[string][]Operation{}
+ 	for _, op := range ops {
+-		_, _, _, _, gOp := op.shape()
++		_, _, _, _, gOp, _ := op.shape()
+ 
+ 		gN := gOp.GenericName()
+ 		seen[gN] = append(seen[gN], op)
+@@ -689,7 +728,7 @@ func copyConstImm(ops []Operation) error {
+ 		if op.ConstImm == nil {
+ 			continue
+ 		}
+-		_, _, _, immType, _ := op.shape()
++		_, _, _, immType, _, _ := op.shape()
+ 
+ 		if immType == ConstImm || immType == ConstVarImm {
+ 			op.In[0].Const = op.ConstImm
+@@ -727,7 +766,29 @@ func overwrite(ops []Operation) error {
+ 			*op[idx].Lanes = *op[idx].Bits / *op[idx].ElemBits
+ 			*op[idx].Go = fmt.Sprintf("%s%dx%d", capitalizeFirst(*op[idx].Base), *op[idx].ElemBits, *op[idx].Lanes)
+ 		}
+-		if op[idx].OverwriteClass != nil {
++		if CurrentArch().Arch == "arm64" && op[idx].OverwriteClass != nil {
++			if op[idx].OverwriteBase == nil {
++				panic(fmt.Errorf("simdgen: [OverwriteClass] must be set together with [OverwriteBase]: %s", op[idx]))
++			}
++			oBase := *op[idx].OverwriteBase
++			oClass := *op[idx].OverwriteClass
++			if oClass != "greg" {
++				panic(fmt.Errorf("simdgen: [Class] overwrite only supports overwriting to greg: %s", op[idx]))
++			}
++			if oBase != "float" {
++				panic(fmt.Errorf("simdgen: [Class] overwrite must set [OverwriteBase] to float: %s", op[idx]))
++			}
++			if op[idx].Class != "vreg" {
++				panic(fmt.Errorf("simdgen: [Class] overwrite must be overwriting [Class] from vreg: %s", op[idx]))
++			}
++			// The low lane of vreg (with other lanes zeroed) also represents a regular floating point greg.
++			// This is supposed to be used only by special instructions like float GetElem
++			// and floating point vector reduction across-lanes to lane 0 like FMINNMV.
++			hasClassOverwrite = true
++			*op[idx].Base = oBase
++			op[idx].Class = oClass
++			*op[idx].Go = fmt.Sprintf("float%d", *op[idx].ElemBits)
++		} else if op[idx].OverwriteClass != nil {
+ 			if op[idx].OverwriteBase == nil {
+ 				panic(fmt.Errorf("simdgen: [OverwriteClass] must be set together with [OverwriteBase]: %s", op[idx]))
+ 			}
+diff --git a/src/simd/archsimd/_gen/simdgen/godefs.go b/src/simd/archsimd/_gen/simdgen/godefs.go
+index 1f10442cf5..d30a3e7c53 100644
+--- a/src/simd/archsimd/_gen/simdgen/godefs.go
++++ b/src/simd/archsimd/_gen/simdgen/godefs.go
+@@ -302,6 +302,7 @@ type Operand struct {
+ 	// The compiler will right-shift the user-passed value by ImmOffset and set it as the AuxInt
+ 	// field of the operation.
+ 	ImmOffset *string
++	ImmMax	  *int    // optional maximum immediate, also highest case in immediate jump table
+ 	Name      *string // optional name in the Go intrinsic declaration
+ 	Lanes     *int    // *Lanes equals Bits/ElemBits except for scalars, when *Lanes == 1
+ 	// TreatLikeAScalarOfSize means only the lower $TreatLikeAScalarOfSize bits of the vector
+diff --git a/src/simd/archsimd/ops_arm64.go b/src/simd/archsimd/ops_arm64.go
+index 3b7e972864..66c3d36a38 100644
+--- a/src/simd/archsimd/ops_arm64.go
++++ b/src/simd/archsimd/ops_arm64.go
+@@ -55,6 +55,78 @@ func (x Uint32x4) Add(y Uint32x4) Uint32x4
+ // Asm: VADD, CPU Feature: NEON
+ func (x Uint64x2) Add(y Uint64x2) Uint64x2
+ 
++/* GetElem */
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VDUP, CPU Feature: NEON
++func (x Float32x4) GetElem(x_i uint8) float32
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VDUP, CPU Feature: NEON
++func (x Float64x2) GetElem(x_i uint8) float64
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (x Int8x16) GetElem(x_i uint8) int8
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (x Int16x8) GetElem(x_i uint8) int16
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (x Int32x4) GetElem(x_i uint8) int32
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (x Int64x2) GetElem(x_i uint8) int64
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (x Uint8x16) GetElem(x_i uint8) uint8
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (x Uint16x8) GetElem(x_i uint8) uint16
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (x Uint32x4) GetElem(x_i uint8) uint32
++
++// GetElem retrieves a single constant-indexed element's value.
++//
++// x_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (x Uint64x2) GetElem(x_i uint8) uint64
++
+ /* Mul */
+ 
+ // Mul multiplies corresponding elements of two vectors.
+@@ -97,6 +169,76 @@ func (x Uint16x8) Mul(y Uint16x8) Uint16x8
+ // Asm: VMUL, CPU Feature: NEON
+ func (x Uint32x4) Mul(y Uint32x4) Uint32x4
+ 
++/* SetElem */
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (original Int8x16) SetElem(destination_i uint8, x int8) Int8x16
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (original Int16x8) SetElem(destination_i uint8, x int16) Int16x8
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (original Int32x4) SetElem(destination_i uint8, x int32) Int32x4
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (original Int64x2) SetElem(destination_i uint8, x int64) Int64x2
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (original Uint8x16) SetElem(destination_i uint8, x uint8) Uint8x16
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (original Uint16x8) SetElem(destination_i uint8, x uint16) Uint16x8
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (original Uint32x4) SetElem(destination_i uint8, x uint32) Uint32x4
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++//
++// Asm: VMOV, CPU Feature: NEON
++func (original Uint64x2) SetElem(destination_i uint8, x uint64) Uint64x2
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++// Asm: VMOV, CPU Feature: NEON
++func (original Float32x4) SetElem(destination_i uint8, v float32) Float32x4
++
++// SetElem sets a single constant-indexed element's value.
++//
++// destination_i results in better performance when it's a constant, a non-constant value will be translated into a jump table.
++// Asm: VMOV, CPU Feature: NEON
++func (original Float64x2) SetElem(destination_i uint8, v float64) Float64x2
++
+ // AsFloat64x2 returns a Float64x2 with the same bit representation as x.
+ func (x Float32x4) AsFloat64x2() Float64x2
+ 
